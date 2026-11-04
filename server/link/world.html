@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tago 도로 링크</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<style>
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; background:#0b1018; color:#e8edf5;
+               font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif; }
+  #c { position:fixed; inset:0; width:100%; height:100%; display:block; }   /* 캔버스 CSS 크기를 고정(화면 배율이 1이 아니면 그림이 밀려 보였다) */
+  .hud { position:fixed; pointer-events:none; }
+  #top { left:24px; top:20px; }
+  #top h1 { margin:0; font-size:26px; font-weight:800; letter-spacing:-.3px; }
+  #top h1 b { color:#4d9bff; }
+  #top p { margin:4px 0 0; color:#9aa7b8; font-size:15px; }
+  #stats { right:24px; top:20px; display:flex; gap:12px; }
+  .stat { background:rgba(16,24,36,.82); border:1px solid #233246; border-radius:14px; padding:10px 16px; min-width:120px; }
+  .stat small { display:block; color:#8b98aa; font-size:12px; }
+  .stat span { font-size:28px; font-weight:800; }
+  .stat.blue span { color:#4d9bff; } .stat.green span { color:#3ddc97; } .stat.amber span { color:#ffb020; }
+  #advice { left:50%; transform:translateX(-50%); top:20px; background:rgba(13,40,80,.88); border:1px solid #2f6fd6; border-radius:16px;
+            padding:10px 22px; text-align:center; display:none; }
+  #advice small { display:block; color:#9cc3ff; font-size:13px; } #advice span { font-size:34px; font-weight:800; }
+  #feed { left:24px; bottom:22px; width:420px; display:flex; flex-direction:column-reverse; gap:6px; }
+  .ev { background:rgba(16,24,36,.85); border-left:4px solid #4d9bff; border-radius:10px; padding:8px 12px; font-size:15px; animation:in .4s ease; }
+  @keyframes in { from { opacity:0; transform:translateX(-12px); } to { opacity:1; transform:none; } }
+  #legend { right:24px; bottom:22px; background:rgba(16,24,36,.82); border:1px solid #233246; border-radius:14px; padding:10px 14px; font-size:13px; color:#b8c4d4; line-height:1.9; }
+  #legend i { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+  #cam { position:fixed; right:24px; top:100px; display:flex; gap:6px; }
+  #cam button { background:rgba(16,24,36,.85); color:#cfd8e4; border:1px solid #2a3a50; border-radius:10px; padding:7px 12px; font:inherit; font-size:13px; cursor:pointer; }
+  #cam button.on { background:#2f6fd6; color:#fff; border-color:#2f6fd6; }
+  #wait { left:50%; top:50%; transform:translate(-50%,-50%); font-size:18px; color:#9aa7b8; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="top" class="hud"><h1><b>Tago</b> 도로 링크</h1><p id="route">경부고속도로 하행 · 연결 중…</p></div>
+<div id="advice" class="hud"><small>정체를 녹이는 권장 속도</small><span id="adv">–</span></div>
+<div id="stats" class="hud">
+  <div class="stat blue"><small>연결된 Tago 차</small><span id="nCars">0</span></div>
+  <div class="stat amber"><small>공유된 신호</small><span id="nSig">0</span></div>
+  <div class="stat green"><small>내 차 속도</small><span id="mySpd">–</span></div>
+</div>
+<div id="cam"><button data-m="drone" class="on">드론</button><button data-m="all">앞 12km 전체</button><button data-m="chase">내 차 뒤</button></div>
+<div id="feed" class="hud"></div>
+<div id="legend" class="hud">
+  <div><i style="background:#2f80ff"></i>내 차</div><div><i style="background:#e9eef5"></i>다른 Tago 차(익명)</div>
+  <div><i style="background:#ff9f1a"></i>가족 그룹</div><div><i style="background:#ff3b30"></i>급제동·사고 의심</div>
+  <div><i style="background:#ffb020"></i>정체 · 낙하물(급조향)</div><div><i style="background:#38bdf8"></i>비(와이퍼) · 침수(되돌아감)</div>
+  <div><i style="background:#8b5cf6"></i>연기(내기순환) · 긴 내리막(브레이크)</div>
+  <div style="color:#6b7a8f;font-size:11px">차 모델: Kenney Car Kit (CC0)</div>
+</div>
+<div id="wait" class="hud">차가 도로 링크에 연결되면 여기에 보여요</div>
+<script>
+const qs = new URLSearchParams(location.search);
+const ME = qs.get('me') || '';
+const U = 20;                         // 1 단위 = 20m
+const AHEAD = 12000, BEHIND = 2500;   // 내 차 기준으로 보여 줄 범위(m)
+const LANES = [-1.7, 0, 1.7];          // 3차로(단위)
+const TYPE = {HARD_BRAKE: ['급제동', 0xff3b30], INCIDENT: ['사고 의심', 0xff3b30], CONGESTION: ['정체', 0xffb020], HEAVY_RAIN: ['비', 0x38bdf8], ICING: ['결빙', 0x93c5fd],
+  CHARGER_FAULT: ['충전기 고장 의심', 0xffb020], CHARGER_WAIT: ['충전 대기', 0x38bdf8], OFFICIAL: ['도로 정보', 0xff3b30],
+  BLOCKED: ['길 막힘 의심', 0xff3b30], DEBRIS: ['낙하물 의심', 0xffb020], SMOKE: ['연기·매연', 0x8b5cf6], DOWNHILL: ['긴 내리막', 0xa78bfa],
+  SIREN: ['긴급차량', 0xff3b30]};
+// 3D 차 모델: Kenney Car Kit 3.1 (CC0, www.kenney.nl) — /models/<이름>.glb. 못 받으면 상자 차로 그린다
+const MODELS = ['sedan', 'sedan-sports', 'suv', 'suv-luxury', 'hatchback-sports', 'van', 'truck', 'delivery'];
+const gltf = new THREE.GLTFLoader();
+const modelCache = new Map();
+function loadModel(name) {
+  if (!modelCache.has(name)) modelCache.set(name, new Promise(res => gltf.load(`/models/${name}.glb`, g => {
+    const obj = g.scene;
+    obj.rotation.y = Math.PI;                                   // Kenney 차는 +Z를 보고, 이 장면의 진행 방향은 -Z
+    const box = new THREE.Box3().setFromObject(obj), size = box.getSize(new THREE.Vector3());
+    const k = 2.8 / Math.max(size.z, 0.01); obj.scale.setScalar(k);   // 차 길이 2.8단위(멀리서도 보이게 실제 비율보다 조금 크게)
+    const box2 = new THREE.Box3().setFromObject(obj); obj.position.y = -box2.min.y;
+    res(obj);
+  }, undefined, () => res(null))));
+  return modelCache.get(name);
+}
+
+// ---------------------------------------------------------------- 장면
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({canvas, antialias: true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1018);
+scene.fog = new THREE.Fog(0x0b1018, 160, 900);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 2000);
+scene.add(new THREE.HemisphereLight(0xbcd2ff, 0x1a2230, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 0.7); sun.position.set(40, 80, 20); scene.add(sun);
+
+// 도로: 길게 깔고 내 차를 따라 움직인다
+const roadLen = (AHEAD + BEHIND) / U + 200;
+const road = new THREE.Mesh(new THREE.PlaneGeometry(6.4, roadLen), new THREE.MeshStandardMaterial({color: 0x1d2633, roughness: 1}));
+road.rotation.x = -Math.PI / 2; scene.add(road);
+const shoulder = new THREE.Mesh(new THREE.PlaneGeometry(400, roadLen), new THREE.MeshStandardMaterial({color: 0x121b27, roughness: 1}));
+shoulder.rotation.x = -Math.PI / 2; shoulder.position.y = -0.02; scene.add(shoulder);
+const marks = new THREE.Group(); scene.add(marks);
+const markMat = new THREE.MeshBasicMaterial({color: 0x5b6b80});
+for (let i = 0; i < roadLen / 3; i++) for (const x of [-0.85, 0.85]) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 1.2), markMat); m.rotation.x = -Math.PI / 2; m.position.set(x, 0.01, -i * 3); marks.add(m);
+}
+for (const x of [-3.2, 3.2]) { const e = new THREE.Mesh(new THREE.PlaneGeometry(0.08, roadLen), new THREE.MeshBasicMaterial({color: 0x8291a6}));
+  e.rotation.x = -Math.PI / 2; e.position.set(x, 0.01, 0); marks.add(e); }
+
+// 길가: 가드레일 기둥·가로등(100m마다) — 속도감과 거리감
+const side = new THREE.Group(); scene.add(side);
+const postGeo = new THREE.BoxGeometry(.12, .5, .12), postMat = new THREE.MeshStandardMaterial({color: 0x6b7a8f});
+const poleGeo = new THREE.CylinderGeometry(.06, .06, 4, 6), lampGeo = new THREE.BoxGeometry(.8, .12, .25), lampMat = new THREE.MeshBasicMaterial({color: 0xfff2c4});
+const SIDE_N = Math.ceil(roadLen / 5);
+for (let i = 0; i < SIDE_N; i++) for (const x of [-3.7, 3.7]) {
+  const p = new THREE.Mesh(postGeo, postMat); p.position.set(x, .25, -i * 5); side.add(p);
+  if (i % 4 === 0) { const pole = new THREE.Mesh(poleGeo, postMat); pole.position.set(x * 1.1, 2, -i * 5); side.add(pole);
+    const lamp = new THREE.Mesh(lampGeo, lampMat); lamp.position.set(x * 1.1 - Math.sign(x) * .4, 4, -i * 5); side.add(lamp); }
+}
+for (const x of [-3.7, 3.7]) { const rail = new THREE.Mesh(new THREE.BoxGeometry(.05, .12, roadLen), postMat); rail.position.set(x, .45, -roadLen / 2 + 50); side.add(rail); }
+const sky = document.createElement('canvas'); sky.width = 2; sky.height = 256;
+{ const g = sky.getContext('2d'), gr = g.createLinearGradient(0, 0, 0, 256); gr.addColorStop(0, '#05080d'); gr.addColorStop(.55, '#0f1a2a'); gr.addColorStop(1, '#1d2b40');
+  g.fillStyle = gr; g.fillRect(0, 0, 2, 256); }
+scene.background = new THREE.CanvasTexture(sky);
+
+// 비 구간: 반투명 기둥 + 떨어지는 빗줄기
+const rainBox = new THREE.Mesh(new THREE.BoxGeometry(16, 10, 1), new THREE.MeshBasicMaterial({color: 0x38bdf8, transparent: true, opacity: 0.07, depthWrite: false}));
+rainBox.visible = false; scene.add(rainBox);
+const RAIN_N = 2500, rainGeo = new THREE.BufferGeometry(), rainPos = new Float32Array(RAIN_N * 6);
+rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+const rainLines = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({color: 0x7dd3fc, transparent: true, opacity: 0.55}));
+rainLines.visible = false; scene.add(rainLines);
+const rainSeed = Array.from({length: RAIN_N}, () => [Math.random() * 14 - 7, Math.random() * 10, Math.random()]);
+
+function label(text, color = '#e8edf5', bg = 'rgba(16,24,36,.85)') {
+  const c = document.createElement('canvas'), g = c.getContext('2d'); g.font = 'bold 44px system-ui, sans-serif';
+  const w = g.measureText(text).width + 40; c.width = w; c.height = 72;
+  g.font = 'bold 44px system-ui, sans-serif'; g.fillStyle = bg; g.beginPath(); g.roundRect(0, 0, w, 72, 18); g.fill();
+  g.fillStyle = color; g.textBaseline = 'middle'; g.fillText(text, 20, 38);
+  // 거리와 상관없이 같은 크기(멀리 있는 위험 이름표도 읽히게)
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({map: new THREE.CanvasTexture(c), depthTest: false, transparent: true, sizeAttenuation: false}));
+  sp.scale.set(w / 72 * 0.034, 0.034, 1); sp.renderOrder = 10; return sp;
+}
+
+// 차
+const carGeo = new THREE.BoxGeometry(1.0, 0.55, 2.1), cabGeo = new THREE.BoxGeometry(0.84, 0.36, 1.0);
+const cars = new Map();
+function makeCar(c) {
+  const g = new THREE.Group();
+  const color = c.me ? 0x2f80ff : c.name ? 0xff9f1a : 0xe9eef5;
+  const body = new THREE.Mesh(carGeo, new THREE.MeshStandardMaterial({color, roughness: .45, metalness: .2})); body.position.y = .3; g.add(body);
+  const cab = new THREE.Mesh(cabGeo, new THREE.MeshStandardMaterial({color: 0x1b2533, roughness: .2})); cab.position.set(0, .66, .1); g.add(cab);
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(.92, .12, .05), new THREE.MeshBasicMaterial({color: 0x550000})); tail.position.set(0, .45, 1.07); g.add(tail);
+  const halo = new THREE.Mesh(new THREE.RingGeometry(1.1, 1.35, 40), new THREE.MeshBasicMaterial({color: 0x4d9bff, transparent: true, opacity: 0, side: THREE.DoubleSide}));
+  halo.rotation.x = -Math.PI / 2; halo.position.y = .05; g.add(halo);
+  if (c.me || c.name) { const l = label(c.me ? '나' : c.name, c.me ? '#9cc3ff' : '#ffc46b'); l.position.y = 2.4; g.add(l); }
+  let h = 0; for (const ch of c.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const lane = c.me ? 1 : h % 3;
+  scene.add(g);
+  const o = {g, tail, halo, lane, s: c.s, kmh: c.kmh, stopped: c.stopped, rain: c.rain, flash: 0, x: LANES[lane]};
+  loadModel(c.me ? 'sedan' : MODELS[h % MODELS.length]).then(m => {
+    if (!m) return;
+    const inst = m.clone(true);
+    // 내 차는 파랑, 가족 차는 주황 — 차체(body) 메시만 단색으로(텍스처 색에 곱하면 어두워져 알아보기 어렵다)
+    if (c.me || c.name) inst.traverse(n => { if (n.isMesh && /body|door|hood|roof/.test(n.name)) n.material = new THREE.MeshStandardMaterial({color: c.me ? 0x2f80ff : 0xff9f1a, roughness: .4, metalness: .25}); });
+    body.visible = cab.visible = false; g.add(inst);
+    const b = new THREE.Box3().setFromObject(inst); tail.position.set(0, .45, b.max.z - .02);
+  });
+  return o;
+}
+
+// 위험 장면 소품: 낙하물(타이어·콘), 터널(연기), 긴 내리막(화살표), 침수(물)
+function prop(g, type, h) {
+  if (type === 'DEBRIS') {
+    loadModel('debris-tire').then(m => { if (m) { const t = m.clone(true); t.scale.setScalar(.45); t.position.set(-.6, .3, 0); t.rotation.z = .8; g.add(t); } });
+    loadModel('cone').then(m => { if (m) for (const x of [.9, 1.6]) { const t = m.clone(true); t.scale.setScalar(.25); t.position.set(x, 0, .8); g.add(t); } });
+  } else if (type === 'SMOKE') {
+    const len = 30;                                                      // 터널 600m
+    const wallMat = new THREE.MeshStandardMaterial({color: 0x2a3340, roughness: 1});
+    for (const x of [-3.6, 3.6]) { const w = new THREE.Mesh(new THREE.BoxGeometry(.4, 3.2, len), wallMat); w.position.set(x, 1.6, -len / 2 + 4); g.add(w); }
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(7.6, .4, len), wallMat); roof.position.set(0, 3.4, -len / 2 + 4); g.add(roof);
+    const smoke = new THREE.Mesh(new THREE.BoxGeometry(6.4, 3, len - 2), new THREE.MeshBasicMaterial({color: 0x8b8fa3, transparent: true, opacity: .35, depthWrite: false}));
+    smoke.position.set(0, 1.5, -len / 2 + 4); g.add(smoke); g.userData.smoke = smoke;
+    for (let i = 1; i < len / 4; i++) { const lamp = new THREE.Mesh(new THREE.BoxGeometry(.3, .08, .3), new THREE.MeshBasicMaterial({color: 0xffe9b0})); lamp.position.set(0, 3.15, 4 - i * 4); g.add(lamp); }
+  } else if (type === 'DOWNHILL') {
+    const mat = new THREE.MeshBasicMaterial({color: 0xa78bfa, transparent: true, opacity: .8, side: THREE.DoubleSide});
+    for (let i = 0; i < 12; i++) { const a = new THREE.Mesh(new THREE.ConeGeometry(.5, 1.2, 3), mat); a.rotation.x = -Math.PI / 2; a.rotation.z = Math.PI; a.position.set(0, .05, -i * 6); g.add(a); }
+  } else if (type === 'BLOCKED') {
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(16, 40), new THREE.MeshStandardMaterial({color: 0x1e5aa8, transparent: true, opacity: .75, roughness: .15, metalness: .3}));
+    water.rotation.x = -Math.PI / 2; water.position.set(0, .08, -16); g.add(water); g.userData.water = water;
+    loadModel('cone').then(m => { if (m) for (const x of [-2.4, -.8, .8, 2.4]) { const t = m.clone(true); t.scale.setScalar(.3); t.position.set(x, 0, 2); g.add(t); } });
+  }
+}
+
+// 위험 표지(기둥 + 이름표 + 소품)
+const hzObjs = new Map();
+const rainNear = (hs) => world && world.hazards.some(x => x.type === 'HEAVY_RAIN' && x.confirmed && Math.abs(x.s - hs) <= 6000);
+function makeHazard(h) {
+  let [name, color] = TYPE[h.type] || ['위험', 0xffffff];
+  if (h.type === 'BLOCKED' && rainNear(h.s)) name = '침수 의심';
+  const g = new THREE.Group();
+  prop(g, h.type, h);
+  const col = new THREE.Mesh(new THREE.CylinderGeometry(.25, .25, 8, 16, 1, true), new THREE.MeshBasicMaterial({color, transparent: true, opacity: .35, side: THREE.DoubleSide, depthWrite: false}));
+  col.position.y = 4; g.add(col);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(1.5, 2.1, 48), new THREE.MeshBasicMaterial({color, transparent: true, opacity: .6, side: THREE.DoubleSide}));
+  ring.rotation.x = -Math.PI / 2; ring.position.y = .03; g.add(ring);
+  const l = label(`${name}${h.cars > 1 ? ' · ' + h.cars + '대' : ''}`, '#fff', '#' + color.toString(16).padStart(6, '0') + 'dd');
+  l.position.y = {INCIDENT: 12, BLOCKED: 12, HARD_BRAKE: 9.5, DEBRIS: 9.5, SMOKE: 7, DOWNHILL: 7, CONGESTION: 7, HEAVY_RAIN: 14.5, ICING: 14.5}[h.type] || 9; g.add(l);   // 같은 곳 이름표가 겹치지 않게 높이를 나눈다
+  if (h.type === 'SMOKE' || h.type === 'DOWNHILL') { col.visible = false; ring.visible = false; }
+  if (h.type === 'SIREN') { col.visible = false; l.position.y = 5; }    // 사이렌을 들은 차들로 짐작한 긴급차량 위치(움직인다)
+  scene.add(g);
+  return {g, ring, col, l, type: h.type, cars: h.cars, s: h.s};
+}
+
+// 신호 파동: 보고한 차에서 뒤쪽(오는 차들 쪽)으로 퍼지는 빛 — 도로 링크가 '전달'되는 모습
+const waves = [];
+const seenPulse = new Set();
+function makeWave(p) {
+  const color = (TYPE[p.type] || [0, 0x4d9bff])[1];
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(4.8, 6), new THREE.MeshBasicMaterial({color, transparent: true, opacity: .55, depthWrite: false, side: THREE.DoubleSide}));
+  m.rotation.x = -Math.PI / 2; m.position.y = .06; scene.add(m);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(.5, 1, 48), new THREE.MeshBasicMaterial({color, transparent: true, opacity: .8, side: THREE.DoubleSide}));
+  ring.rotation.x = -Math.PI / 2; ring.position.y = .07; scene.add(ring);
+  waves.push({m, ring, s0: p.s, t0: performance.now(), type: p.type});
+}
+
+// 긴급차량(시연 구급차 — Tago 차가 아니다): 경광등이 번갈아 깜빡이고, 앞 250m 안의 차들은 길을 터 준다(1차로는 왼쪽, 나머지는 오른쪽)
+const EMS_X = -0.85;                                                   // 1·2차로 사이로 달린다
+let ems = null;
+function makeEms() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.0, 2.4), new THREE.MeshStandardMaterial({color: 0xf4f6f8, roughness: .5})); body.position.y = .55; g.add(body);
+  const red = new THREE.Mesh(new THREE.BoxGeometry(.4, .16, .3), new THREE.MeshBasicMaterial({color: 0xff2020}));
+  const blue = new THREE.Mesh(new THREE.BoxGeometry(.4, .16, .3), new THREE.MeshBasicMaterial({color: 0x2060ff}));
+  const glow = new THREE.Mesh(new THREE.RingGeometry(.2, 2.6, 40), new THREE.MeshBasicMaterial({color: 0xff2020, transparent: true, opacity: .35, side: THREE.DoubleSide, depthWrite: false}));
+  glow.rotation.x = -Math.PI / 2; glow.position.y = .06; g.add(glow);
+  const l = label('구급차', '#fff', '#ff3b30dd'); l.position.y = 3; g.add(l);
+  scene.add(g);
+  const o = {g, red, blue, glow, body, s: 0, on: true, top: 1.15};
+  loadModel('ambulance').then(m => {
+    if (!m) return;
+    const inst = m.clone(true); body.visible = false; g.add(inst);
+    o.top = new THREE.Box3().setFromObject(inst).max.y + .05;
+    red.position.set(-.22, o.top, -.2); blue.position.set(.22, o.top, -.2);
+  });
+  red.position.set(-.22, o.top, -.2); blue.position.set(.22, o.top, -.2); g.add(red); g.add(blue);
+  return o;
+}
+
+// ---------------------------------------------------------------- 데이터
+let world = null, view = null, lastFetch = 0, scale = 4, mySeen = null, sigCount = 0;
+const feed = document.getElementById('feed');
+let lastFeed = null;
+function pushFeed(key, text, color) {
+  const now = performance.now();
+  if (lastFeed && lastFeed.key === key && now - lastFeed.t < 4000) {      // 같은 종류는 4초 안이면 한 줄로
+    lastFeed.n++; lastFeed.t = now; lastFeed.el.textContent = `${text} ×${lastFeed.n}`; return;
+  }
+  const d = document.createElement('div'); d.className = 'ev'; d.style.borderLeftColor = color; d.textContent = text;
+  feed.prepend(d); while (feed.children.length > 6) feed.lastChild.remove();
+  lastFeed = {key, t: now, n: 1, el: d};
+}
+async function poll() {
+  try {
+    const [w, v] = await Promise.all([fetch(`/api/road/world?me=${encodeURIComponent(ME)}`).then(r => r.json()),
+      ME ? fetch(`/api/road?me=${encodeURIComponent(ME)}`).then(r => r.json()) : Promise.resolve(null)]);
+    world = w; view = v; lastFetch = performance.now(); scale = w.scale || 4;
+    document.getElementById('wait').style.display = w.cars.length ? 'none' : 'block';
+    sync();
+  } catch (e) { /* 다음 주기에 다시 */ }
+  setTimeout(poll, 500);
+}
+fetch('/api/road/route').then(r => r.json()).then(r => { document.getElementById('route').textContent = `${r.name} · ${(r.length / 1000).toFixed(1)}km · 휴게소 ${r.restAreas.length}곳`; }).catch(() => {});
+
+function sync() {
+  const ids = new Set();
+  for (const c of world.cars) {
+    ids.add(c.id);
+    let o = cars.get(c.id);
+    if (!o) { o = makeCar(c); cars.set(c.id, o); }
+    o.s = c.s; o.kmh = c.kmh; o.stopped = c.stopped; o.rain = c.rain; o.me = c.me; o.yield = c.yield;
+  }
+  const e = (world.ems || [])[0];
+  if (e && !ems) ems = makeEms();
+  if (ems) { ems.g.visible = !!e; if (e) { ems.s = e.s; ems.on = e.on; } }
+  for (const [id, o] of cars) if (!ids.has(id)) { scene.remove(o.g); cars.delete(id); }
+  const hids = new Set();
+  for (const h of world.hazards.filter(h => h.confirmed)) {
+    hids.add(h.id);
+    let o = hzObjs.get(h.id);
+    if (!o || o.cars !== h.cars) { if (o) scene.remove(o.g); o = makeHazard(h); hzObjs.set(h.id, o); }
+    o.s = h.s;
+  }
+  for (const [id, o] of hzObjs) if (!hids.has(id)) { scene.remove(o.g); hzObjs.delete(id); }
+  for (const p of world.pulses) {
+    const key = `${p.t}|${p.car}|${p.type}`;
+    if (seenPulse.has(key)) continue;
+    seenPulse.add(key); sigCount++;
+    makeWave(p);
+    const [name, color] = TYPE[p.type] || ['신호', 0x4d9bff];
+    const SIG = {DEBRIS: '급조향', SMOKE: '내기순환', DOWNHILL: '브레이크 20초', BLOCKED: '되돌아감', SIREN: '사이렌(마이크)', CHARGER_FAULT: '충전 실패', CHARGER_WAIT: '충전 대기'};
+    pushFeed(p.type + (p.car === ME), `${SIG[p.type] || name} 신호 · ${p.car === ME ? '내 차' : '익명 Tago 차'} → ${p.type === 'SIREN' ? '앞차들에게(길 터 주기)' : '뒤따르는 차들에게'}`, '#' + color.toString(16).padStart(6, '0'));
+  }
+  document.getElementById('nCars').textContent = Math.max(0, world.cars.length - (ME ? 1 : 0));
+  document.getElementById('nSig').textContent = sigCount;
+  const me = world.cars.find(c => c.me);
+  document.getElementById('mySpd').textContent = me ? `${me.kmh}` : '–';
+  const adv = view && view.ahead && view.ahead.advice;
+  const ab = document.getElementById('advice');
+  if (adv && adv.dist > 0) { ab.style.display = 'block'; document.getElementById('adv').textContent = `시속 ${adv.adviseKmh} · ${(adv.dist / 1000).toFixed(1)}km 앞 정체`; }
+  else ab.style.display = 'none';
+}
+
+// ---------------------------------------------------------------- 그리기
+let camMode = 'drone';
+document.querySelectorAll('#cam button').forEach(b => b.onclick = () => {
+  camMode = b.dataset.m; document.querySelectorAll('#cam button').forEach(x => x.classList.toggle('on', x === b));
+});
+function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+
+let refS = null;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!world) { renderer.render(scene, camera); return; }
+  const dt = (now - lastFetch) / 1000;                 // 다음 응답까지 속도로 이어서 움직인다(부드럽게)
+  const me = [...cars.values()].find(o => o.me);
+  const target = me ? me.s + me.kmh / 3.6 * scale * dt : (world.s0 || 0);
+  refS = refS == null ? target : refS + (target - refS) * 0.15;
+  const z = s => -(s - refS) / U;                      // 앞(먼 곳) = -z
+  road.position.z = -(AHEAD - BEHIND) / U / 2; shoulder.position.z = road.position.z;
+  marks.position.z = ((refS / U) % 3) + 6;
+  side.position.z = ((refS / U) % 20) + 40;
+  for (const o of cars.values()) {
+    const s = o.s + o.kmh / 3.6 * scale * dt;
+    const tx = o.yield ? (o.lane === 0 ? -2.6 : o.lane === 1 ? 0.8 : 2.5) : LANES[o.lane];   // 길 터 주기
+    o.x += (tx - o.x) * 0.06;
+    o.g.position.set(o.x, 0, z(s));
+    o.g.visible = s > refS - BEHIND && s < refS + AHEAD;
+    o.tail.material.color.setHex(o.kmh < 30 ? 0xff2a2a : 0x550000);
+    if (o.stopped) o.tail.material.color.setHex(Math.floor(now / 350) % 2 ? 0xffb000 : 0x332200);   // 비상등
+    o.flash = Math.max(0, o.flash - 0.02);
+    o.halo.material.opacity = o.flash;
+  }
+  if (ems && ems.g.visible) {
+    ems.g.position.set(EMS_X, 0, z(ems.s));
+    const blink = Math.floor(now / 180) % 2 === 0;
+    ems.red.material.color.setHex(ems.on && blink ? 0xff2020 : 0x330000);
+    ems.blue.material.color.setHex(ems.on && !blink ? 0x2060ff : 0x000833);
+    ems.glow.material.color.setHex(blink ? 0xff2020 : 0x2060ff); ems.glow.material.opacity = ems.on ? .35 : 0;
+  }
+  for (const o of hzObjs.values()) {
+    o.g.position.set(o.type === 'SIREN' ? EMS_X : 0, 0, z(o.s));
+    o.g.visible = o.type === 'SIREN' ? o.s > refS - BEHIND && o.s < refS + AHEAD : o.s > refS + 120 && o.s < refS + AHEAD;   // 내 차 바로 옆·뒤의 표지는 숨긴다(기둥이 시야를 가린다). 긴급차량은 뒤에서 온다
+    const k = 1 + 0.15 * Math.sin(now / 250); o.ring.scale.set(k, k, k);
+    if (o.g.userData.water) o.g.userData.water.material.opacity = .65 + .1 * Math.sin(now / 400);
+    if (o.g.userData.smoke) o.g.userData.smoke.material.opacity = .3 + .08 * Math.sin(now / 700);
+  }
+  // 신호 파동: 1.6초 동안 보고 지점에서 뒤로 3km 퍼진다. 지나가는 차는 파란 고리로 '받음' 표시
+  for (let i = waves.length - 1; i >= 0; i--) {
+    const w = waves[i], age = (now - w.t0) / 1600;
+    if (age > 1) { scene.remove(w.m); scene.remove(w.ring); waves.splice(i, 1); continue; }
+    const fwd = w.type === 'SIREN';                                     // 사이렌은 앞차들(긴급차량이 갈 쪽)로 퍼진다
+    const front = fwd ? w.s0 + age * 2000 : w.s0 - age * 3000;
+    w.m.position.z = z(front); w.m.material.opacity = .55 * (1 - age);
+    w.ring.position.z = z(w.s0); const r = 1 + age * 10; w.ring.scale.set(r, r, r); w.ring.material.opacity = .8 * (1 - age);
+    for (const o of cars.values()) if (Math.abs(o.s - front) < 160 && (fwd ? o.s > w.s0 : o.s < w.s0)) { o.flash = 1; o.halo.material.color.setHex((TYPE[w.type] || [0, 0x4d9bff])[1]); }
+  }
+  // 비 구간: 와이퍼를 켠 차들의 범위
+  const wet = [...cars.values()].filter(o => o.rain).map(o => o.s);
+  if (wet.length >= 2) {
+    const a = Math.min(...wet) - 300, b = Math.max(...wet) + 300;
+    rainBox.visible = rainLines.visible = true;
+    rainBox.scale.z = (b - a) / U; rainBox.position.set(0, 5, z((a + b) / 2));
+    const len = (b - a) / U, z0 = z(a);
+    for (let i = 0; i < RAIN_N; i++) {
+      const [x, y0, f] = rainSeed[i]; const y = (y0 - now / 120 * (0.6 + f)) % 10; const yy = y < 0 ? y + 10 : y; const zz = z0 - f * len;
+      rainPos.set([x, yy, zz, x, yy + .5, zz + .1], i * 6);
+    }
+    rainGeo.attributes.position.needsUpdate = true;
+  } else rainBox.visible = rainLines.visible = false;
+  // 카메라
+  const mz = me ? me.g.position.z : 0;
+  if (camMode === 'drone') { camera.position.set(4.5, 8.5, mz + 15); camera.lookAt(0, 0, mz - 30); }
+  else if (camMode === 'all') { camera.position.set(0, 230, mz + 40); camera.lookAt(0, 0, mz - 300); }
+  else { camera.position.set(0, 3.6, mz + 11); camera.lookAt(0, 1, mz - 40); }
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+poll();
+</script>
+</body>
+</html>
