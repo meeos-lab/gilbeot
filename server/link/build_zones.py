@@ -103,7 +103,8 @@ def s_of(km, pts):
 
 
 def hotspots(csv_path, pts, tunnels):
-    rows = list(csv.DictReader(open(csv_path, encoding="cp949", errors="replace")))
+    with open(csv_path, encoding="cp949", errors="replace") as f:
+        rows = list(csv.DictReader(f))
     acc = []
     for r in rows:
         if r.get("노선명") != "경부선" or r.get("방향") != "부산" or not r.get("사고발생이정"):
@@ -175,6 +176,12 @@ def structures(osm):
     return res
 
 
+# 구역별 제한속도(km/h, 선택): 구역 id → 값. 허브는 정체 꼬리가 이 구역 안이면 권고 속도(80)를 이 값으로 상한한다(ADR-44).
+# 실제 값은 미정 — 경부선 하행의 구간별 제한속도(100/110, 공사·기상 가변) 자료가 없어 비워 둔다(docs/dev/40 A-06, 87 B-67).
+# 값을 넣을 때는 출처를 route_file["sources"] 에도 적는다.
+ZONE_LIMITS = {}
+
+
 def main(csv_path, bt_path=None, jn_path=None):
     bt = load_osm(bt_path, f"""[out:json][timeout:180];
 (
@@ -192,6 +199,8 @@ out body;""")
     allz = sorted(st + zones, key=lambda z: (z["s0"], z["kind"]))
     for i, z in enumerate(allz, 1):
         z["id"] = f"z{i}"
+        if z["id"] in ZONE_LIMITS:
+            z["limit"] = int(ZONE_LIMITS[z["id"]])
     route_file["zones"] = allz
     src = [x for x in route_file["sources"] if not x.startswith(("한국도로공사", "위키백과"))]
     route_file["sources"] = src + [f"한국도로공사_고속도로 교통사고 상세현황(공공데이터포털 15145192, 2023~2025) — 경부선 하행 이 경로 {n}건",

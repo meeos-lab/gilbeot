@@ -9,6 +9,7 @@ import heapq
 import json
 import math
 import sys
+from pathlib import Path
 
 START = (37.4685, 127.0425)    # 양재IC 부근(서울 출발)
 END = (36.8330, 127.1720)      # 천안IC 부근
@@ -47,7 +48,7 @@ def simplify(pts, eps):
 
 
 def main(raw_path, out_path):
-    data = json.load(open(raw_path, encoding="utf-8"))
+    data = json.loads(Path(raw_path).read_text(encoding="utf-8"))
     nodes = {e["id"]: (e["lat"], e["lon"]) for e in data["elements"] if e["type"] == "node" and "lat" in e}
     adj = {}
     for e in data["elements"]:
@@ -79,7 +80,6 @@ def main(raw_path, out_path):
                 path = [u]
                 while path[-1] in prev:
                     path.append(prev[path[-1]])
-                best = path[::-1] if best is None or len(path) > 0 and c < best[0] else best
                 best = (c, path[::-1])
                 break
             if c > D.get(u, math.inf):
@@ -131,7 +131,7 @@ def main(raw_path, out_path):
     out = {"name": "경부고속도로 하행 (서울 양재 → 천안)", "nameEn": "Gyeongbu Expressway southbound (Seoul → Cheonan)",
            "route": route, "length": round(cum[-1]), "restAreas": rests,
            "sources": ["© OpenStreetMap contributors (ODbL) — Overpass API, 2026-10-25"]}
-    json.dump(out, open(out_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    Path(out_path).write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"경로 {len(path)}→{len(route)}점, {cum[-1] / 1000:.1f}km, 휴게소 {len(rests)}곳")
     for r in rests:
         print(f"  {r['s'] / 1000:6.1f}km  {r['name']} ({r['kind']}, 오른쪽 {r['offset']}m)")

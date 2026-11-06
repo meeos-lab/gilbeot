@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>길벗 구급차</title>
+<!-- 이 파일은 만든 것이다: 지도 어댑터(MAPAPI 블록)와 사이렌 표지 그림은 link.html 에서 그대로 떼어 왔다(앱은 목록에 적은 자산만 싣는다) -->
+<!-- 정적 스크립트는 판을 고정하고 무결성(SRI)을 건다: CDN 이 바뀐 파일을 주면 브라우저가 실행하지 않는다 -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
+<!-- OpenFreeMap 바탕용 MapLibre(약 800KB)는 TMAP 앱키가 없을 때만 leafletApi().load() 가 불러온다(차량 WebView 의 내려받기·파싱·GL 컨텍스트 하나를 아낀다) -->
+<style>
+  /* 휴대폰 참가자 페이지(link.html)와 같은 토큰: 흰 바탕·검정 글자, 주 동작은 검정 채움, 직각, 1px 회색 테두리. 색은 위험 red 에만. 다크는 시스템 모드 */
+  :root { --bg:#FFFFFF; --card:#FFFFFF; --face:#F2F2F2; --text:#000000; --sub:#6E6E6E; --line:#D4D4D4; --divider:#E6E6E6; --ink:#000000; --onink:#FFFFFF; --warn:#F62E24; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1C1C1C; --card:#1C1C1C; --face:#2A2A2A; --text:#F2F2F2; --sub:#9E9E9E; --line:#3A3A3A; --divider:#303030; --ink:#E8E8E8; --onink:#111111; --warn:#FF4339; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif; -webkit-tap-highlight-color:transparent; }
+  .wrap { max-width:520px; margin:0 auto; padding:20px 16px 32px; }
+  header .brand { margin:0 0 14px; font-size:14px; line-height:18px; font-weight:700; letter-spacing:.02em; }
+  header h1 { font-size:24px; line-height:32px; margin:0; } header p { margin:6px 0 0; color:var(--sub); font-size:15px; line-height:22px; }
+  header h1.on { color:var(--warn); }
+  /* 진행: 목적지까지(출동 시작 때 거리 대비) — 면 색 줄 위 ink 채움, 직각 */
+  .bar { height:6px; background:var(--face); margin-top:12px; } .bar i { display:block; height:100%; background:var(--ink); width:0; }
+  #map { height:300px; border:1px solid var(--line); margin-top:16px; background:var(--face); }
+  .card { background:var(--card); border:1px solid var(--line); padding:16px; margin-top:16px; }
+  .row { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--divider); font-size:16px; line-height:22px; }
+  .row:last-child { border-bottom:0; } .row b { flex:1; font-weight:400; } .row span { font-weight:700; }
+  button { font:inherit; font-size:17px; line-height:24px; min-height:56px; padding:14px 16px; border:1px solid var(--line); background:var(--card); color:var(--text);
+           width:100%; margin-top:12px; cursor:pointer; transition:transform 80ms, background-color 80ms; border-radius:0; }
+  button:active { transform:scale(.97); background:var(--face); }
+  button[disabled] { color:var(--sub); cursor:default; }
+  .primary { background:var(--ink); color:var(--onink); border-color:var(--ink); font-weight:700; } .primary:active { background:var(--ink); opacity:.85; }
+  .primary[disabled] { background:var(--line); border-color:var(--line); color:var(--onink); }
+  .two { display:flex; gap:12px; } .two button { flex:1; }
+  .chip { display:inline-flex; align-items:center; gap:6px; width:auto; min-height:0; margin:6px 6px 0 0; padding:9px 12px; font-size:15px; line-height:20px; }
+  .chip.on { background:var(--ink); border-color:var(--ink); color:var(--onink); font-weight:700; }
+  .head { font-size:15px; font-weight:700; }
+  .hint { font-size:13px; line-height:19px; color:var(--sub); margin-top:10px; }
+  details { margin-top:16px; font-size:14px; line-height:21px; color:var(--sub); } summary { cursor:pointer; color:var(--text); font-weight:700; }
+  .ic { width:1.15em; height:1.15em; vertical-align:-0.2em; flex:none; }
+  .hzs { width:100%; height:100%; display:block; }
+  .pin { width:28px; height:28px; box-sizing:border-box; display:flex; align-items:center; justify-content:center; background:#000000; border:3px solid #FFFFFF; }
+  .pin svg { width:16px; height:16px; color:#FFFFFF; }
+  .tag { background:#FFFFFF; color:#000000; border:1px solid #D4D4D4; padding:3px 8px; font-size:12px; line-height:16px; font-weight:700; white-space:nowrap; display:inline-block; }
+  .leaflet-container, #map { background:#F2F3F0; font:inherit; }
+  @media (prefers-color-scheme: dark) { .leaflet-container, #map { background:#0C0C0C; } .tag, .leaflet-tooltip.tag, .tmlbl.tag { background:#1C1C1C; color:#F2F2F2; border-color:#3A3A3A; } }
+  .leaflet-tooltip { border-radius:0; box-shadow:none; }
+  .leaflet-bar, .leaflet-bar a, .leaflet-bar a:first-child, .leaflet-bar a:last-child { border-radius:0; }
+  .leaflet-bar { border:1px solid var(--line); box-shadow:none; }
+  body.tmap #map { position:relative; } body.tmap .tmlbl { white-space:nowrap; }
+  .leaflet-control-attribution { font-size:11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><p class="brand">길벗 · 구급차</p><h1 id="title">불러오는 중…</h1><p id="sub"></p><div class="bar"><i id="prog"></i></div></header>
+  <div id="map"></div>
+  <div id="panel"></div>
+  <details id="about"></details>
+</div>
+<script>
+/* MAPAPI:BEGIN — 지도 어댑터(rider.html 과 link/link.html 에 같은 코드: 앱은 목록에 적은 자산만 싣기 때문에 공용 JS 파일을 못 쓴다) */
+// TMAP 앱키가 빌드에 들어오면(app/build.gradle.kts 가 __TMAP_KEY__ 자리를 local.properties 의 tmap.appKey 로 바꾼다) TMAP Vector JS(Tmapv3) 순정 지도 + 공식 NIGHT 테마로,
+// 키가 없으면 지금처럼 Leaflet + OpenFreeMap 벡터 바탕으로 그린다. 그리는 코드는 MapApi 하나만 부른다(좌표는 어디서나 Leaflet 처럼 [위도, 경도])
+const TMAP_KEY = '__TMAP_KEY__';
+const USE_TMAP = TMAP_KEY && !TMAP_KEY.startsWith('__');   // 개발 서버(python)는 치환 전 원본을 주므로 '__' 로 시작한다
+// 두 점 사이 거리(m): Leaflet CRS.Earth.distance 와 같은 하버사인(R = 6371000) — 두 바탕에서 같은 값을 쓴다
+function geoDist(a, b) {
+  const rad = Math.PI / 180, s1 = Math.sin((b[0] - a[0]) * rad / 2), s2 = Math.sin((b[1] - a[1]) * rad / 2);
+  const h = s1 * s1 + Math.cos(a[0] * rad) * Math.cos(b[0] * rad) * s2 * s2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+// 점들을 감싸는 상자 [[남, 서], [북, 동]]. pad 는 Leaflet LatLngBounds.pad 와 같은 비율 여백
+function geoBox(lls, pad = 0) {
+  let s = 90, w = 180, n = -90, e = -180;
+  for (const [la, lo] of lls) { s = Math.min(s, la); n = Math.max(n, la); w = Math.min(w, lo); e = Math.max(e, lo); }
+  const dy = (n - s) * pad, dx = (e - w) * pad;
+  return [[s - dy, w - dx], [n + dy, e + dx]];
+}
+// 라벨 방향: dy<0 점 위, dy>0 점 아래, dx<0 왼쪽, dx>0 오른쪽(dir 로 직접 줄 수도 있다)
+const labelDir = o => o.dir || (o.dy < 0 ? 'top' : o.dy > 0 ? 'bottom' : o.dx < 0 ? 'left' : o.dx > 0 ? 'right' : 'top');
+// 묶음(L.layerGroup 대신): add 로 넣고 clear 로 한꺼번에 지운다 — 두 바탕 공통
+const mapGroup = () => { const items = []; return { add(o) { items.push(o); return o; }, clear() { items.splice(0).forEach(o => o.remove()); } }; };
+
+// 대체 경로(OpenFreeMap)에서만 MapLibre 와 Leaflet 연결 플러그인을 불러온다. 판 고정 + SRI
+const MAPLIBRE_ASSETS = [
+  ['css', 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css', 'sha384-MinO0mNliZ3vwppuPOUnGa+iq619pfMhLVUXfC4LHwSCvF9H+6P/KO4Q7qBOYV5V'],
+  ['js', 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js', 'sha384-SYKAG6cglRMN0RVvhNeBY0r3FYKNOJtznwA0v7B5Vp9tr31xAHsZC0DqkQ/pZDmj'],
+  ['js', 'https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js', 'sha384-4CB9Vtol9LN6lGgBCvmPLbUEZwilrqIvPieSRurgAXAB7FVJaLS9n8WyAIA5wjQ+'],
+];
+let maplibreLoading = null;
+function loadMaplibre() {
+  if (window.maplibregl && L.maplibreGL) return Promise.resolve();
+  if (maplibreLoading) return maplibreLoading;
+  const one = ([kind, url, sri]) => new Promise((res, rej) => {
+    const t = document.createElement(kind === 'css' ? 'link' : 'script');
+    if (kind === 'css') { t.rel = 'stylesheet'; t.href = url; } else { t.src = url; t.async = false; }   // async=false: 플러그인이 maplibre 다음에 실행되게
+    t.integrity = sri; t.crossOrigin = 'anonymous';
+    t.onload = res; t.onerror = () => rej(new Error('불러오기 실패: ' + url));
+    document.head.appendChild(t);
+  });
+  maplibreLoading = Promise.all(MAPLIBRE_ASSETS.map(one));
+  return maplibreLoading;
+}
+function leafletApi() {
+  let M = null, base = null, styleFn = null, offlineDrawn = false;
+  const api = {
+    kind: 'leaflet',
+    load: () => loadMaplibre().catch(e => console.warn(e)),   // MapLibre 를 못 받으면 create 의 onOffline(도로 선 바탕)으로 간다
+    // o: center, zoom, dark, style(dark) → MapLibre 스타일 JSON 약속, credit(출처 줄), onOffline(타일을 못 받을 때), leaflet(L.map 추가 옵션)
+    create(elId, o = {}) {
+      M = L.map(elId, { zoomControl: false, attributionControl: true, preferCanvas: true, ...(o.leaflet || {}) });
+      if (o.center) M.setView(o.center, o.zoom);
+      M.attributionControl.setPrefix(false);   // 출처만 한 줄
+      styleFn = o.style;
+      let tileErrors = 0;
+      const offline = () => { if (o.onOffline) o.onOffline(); };
+      // 인터넷이 없어 타일을 못 받으면(PT 현장 네트워크 등) onOffline 이 지도 데이터의 도로 선으로 바탕을 직접 그린다
+      if (o.onOffline && !navigator.onLine) offline();
+      else styleFn(!!o.dark).then(style => {
+        base = L.maplibreGL({ style, attribution: o.credit }).addTo(M);
+        base.getMaplibreMap().on('error', e => { if (e.tile && ++tileErrors >= 3) offline(); });   // 타일을 못 받을 때만(스타일 오류는 아님)
+      }).catch(offline);
+      return api;
+    },
+    ready(cb) { cb(); },
+    async setDark(dark) { if (base) base.getMaplibreMap().setStyle(await styleFn(dark)); },
+    // 여백(px)은 위·오른쪽·아래·왼쪽 따로. pad = 상자 비율 여백
+    fit(lls, o = {}) {
+      if (!lls.length) return;
+      const b = o.pad ? L.latLngBounds(lls).pad(o.pad) : L.latLngBounds(lls);
+      M.fitBounds(b, { paddingTopLeft: [o.left || 0, o.top || 0], paddingBottomRight: [o.right || 0, o.bottom || 0], maxZoom: o.maxZoom, animate: !!o.animate });
+    },
+    size: () => M.getSize(),
+    invalidate() { M.invalidateSize(false); },
+    getZoom: () => M.getZoom(),
+    setView(ll, z) { M.setView(ll, z); },
+    inView: (ll, pad = 0) => M.getBounds().pad(pad).contains(ll),   // pad<0 = 가장자리 안쪽
+    on(evt, cb) { M.on(evt, evt === 'click' ? e => cb([e.latlng.lat, e.latlng.lng]) : () => cb()); },   // click · zoomend · moveend
+    // 원형 퍽: 점이 가운데. tip = 마우스 툴팁(Leaflet 만), drag = { start(), end([lat, lon]) }
+    puck(o) {
+      const w = o.size, h = o.h || o.size;   // o.bottom: 아래 가운데가 위치(꼬리 달린 표지판)
+      const icon = L.divIcon({ className: o.cls || '', html: o.html, iconSize: [w, h], iconAnchor: [w / 2, o.bottom ? h : h / 2] });
+      const m = L.marker(o.latlng, { icon, zIndexOffset: o.z || 0, interactive: o.interactive !== false, draggable: !!o.drag });
+      if (o.tip) m.bindTooltip(o.tip, o.tipOpts);
+      if (o.drag) {
+        m.on('dragstart', () => o.drag.start && o.drag.start());
+        m.on('dragend', () => { const p = m.getLatLng(); o.drag.end([p.lat, p.lng]); });
+      }
+      m.addTo(M);
+      return { setLatLng: ll => m.setLatLng(ll), remove: () => m.remove() };
+    },
+    // 늘 보이는 HTML 라벨: 지금까지 마커에 붙이던 permanent 툴팁을 같은 자리(방향 + offset)에 따로 띄운다
+    label(o) {
+      const t = L.tooltip({ permanent: true, direction: labelDir(o), offset: [o.dx || 0, o.dy || 0], className: o.cls || 'lbl', opacity: o.opacity ?? 1, interactive: false })
+        .setLatLng(o.latlng).setContent(o.html).addTo(M);
+      return { setLatLng: ll => t.setLatLng(ll), remove: () => t.remove() };
+    },
+    // 선: casing = 밑에 까는 더 굵은 테 선({color, weight, opacity}). tip = 따라다니는 툴팁
+    line(o) {
+      const mk = x => L.polyline(o.latlngs || [], { color: x.color, weight: x.weight, opacity: x.opacity ?? 1, dashArray: x.dash || null, lineJoin: 'round', lineCap: 'round' }).addTo(M);
+      const under = o.casing ? mk(o.casing) : null, top = mk(o);
+      if (o.tip) top.bindTooltip(o.tip, { sticky: true });
+      return { setLatLngs(lls) { if (under) under.setLatLngs(lls); top.setLatLngs(lls); }, remove() { if (under) under.remove(); top.remove(); } };
+    },
+    // 반경(m) 원
+    circle(o) {
+      const c = L.circle(o.latlng, { radius: o.radius, color: o.color, weight: o.weight ?? 2, opacity: o.opacity ?? 1, fillColor: o.fillColor || o.color, fillOpacity: o.fillOpacity, dashArray: o.dash || null }).addTo(M);
+      if (o.tip) c.bindTooltip(o.tip);
+      return { remove: () => c.remove() };
+    },
+    // 화면 크기(px) 고정 점(L.circleMarker)
+    dot(o) {
+      const c = L.circleMarker(o.latlng, { radius: o.radius, color: o.color, weight: o.weight, fillColor: o.fillColor, fillOpacity: o.fillOpacity ?? 1, interactive: false }).addTo(M);
+      return { remove: () => c.remove() };
+    },
+    group: mapGroup,
+    // 타일 없이 도로 선만으로 그린 바탕(Leaflet 만): 타일(200) 위, 경로·표시(400) 아래 칸에
+    offlineBase(roads) {
+      if (offlineDrawn || !roads) return; offlineDrawn = true;
+      const w = { primary: 9, secondary: 8, tertiary: 7, residential: 5, service: 3 };
+      M.createPane('offlineBase').style.zIndex = 250;
+      const o = { pane: 'offlineBase', opacity: 1, interactive: false };
+      for (const r of roads) L.polyline(r.coords, { ...o, color: '#fff', weight: (w[r.highway] || 4) + 2 }).addTo(M);
+      for (const r of roads) L.polyline(r.coords, { ...o, color: '#cfd5dd', weight: w[r.highway] || 4 }).addTo(M);
+      M.getContainer().style.background = '#eef1f4';
+    },
+  };
+  return api;
+}
+
+// 에뮬레이터 WebView 는 WebGL2 만 주고 WebGL1 은 막혀 있다(같은 페이지의 MapLibre 4 는 WebGL2 라 돈다). TMAP 엔진은 'webgl' 만 청하므로,
+// WebGL1 요청이 실패할 때만 WebGL2 컨텍스트를 돌려준다. 엔진 셰이더는 GLSL ES 1.00(#version·#extension 없음)이라 그대로 컴파일되고,
+// 쓰는 확장은 OES_vertex_array_object(WebGL2 기본 기능으로 잇는다)·WEBGL_lose_context 둘뿐이다. 실차처럼 WebGL1 이 되면 아무것도 바꾸지 않는다
+function webgl1OnWebgl2() {
+  const proto = HTMLCanvasElement.prototype;
+  if (proto.__tagoGl1) return; proto.__tagoGl1 = true;
+  const orig = proto.getContext;
+  proto.getContext = function (type, attrs) {
+    const ctx = orig.call(this, type, attrs);
+    if (ctx || (type !== 'webgl' && type !== 'experimental-webgl')) return ctx;
+    const gl = orig.call(this, 'webgl2', attrs);
+    if (!gl || gl.__tagoGl1) return gl;
+    gl.__tagoGl1 = true;
+    const ext = gl.getExtension.bind(gl);
+    gl.getExtension = name => name !== 'OES_vertex_array_object' ? ext(name) : {
+      VERTEX_ARRAY_BINDING_OES: gl.VERTEX_ARRAY_BINDING,
+      createVertexArrayOES: () => gl.createVertexArray(), deleteVertexArrayOES: v => gl.deleteVertexArray(v),
+      isVertexArrayOES: v => gl.isVertexArray(v), bindVertexArrayOES: v => gl.bindVertexArray(v),
+    };
+    return gl;
+  };
+}
+// 순정 내비처럼 지도 위 가게·건물 POI(편의점·카페·은행…)를 끈다 — 만남 후보 퍽과 겹친다. 도로·도로번호·일방통행·유턴·행정경계·지하철역·공원은 남긴다.
+// 티맵 공개 문서에는 없는 엔진 API(vsmMap().getStyleProperties/setStyleProperties, 분류별 icon/label display:off — 티맵 자체 '미표출처리' 와 같은 방식)라 실패해도 지도는 그대로 둔다
+const TMAP_KEEP = /^(행정경계|도로번호|유턴|일방통행|배경|AOI|교통편의_교통시설_(지하철역|고속도로|대교|공항|항구)|여행\/레저_관광명소_(공원|국립공원|도립공원|명산|섬))/;
+async function tmapTidy(map, car) {
+  try {
+    const vm = map.vsmMap && map.vsmMap(); if (!vm) return;
+    const cur = vm.getCurrentStyleNameAndType();
+    let props = vm.getStyleProperties(); if (props && props.then) props = await props;
+    for (const layerId of ['113', '156']) {   // 113 = 라벨(POI 아이콘·글자), 156 = 큰 랜드마크 POI
+      for (const [stackId, es] of Object.entries(props[layerId] || {})) for (const e of es) {
+        if (TMAP_KEEP.test(e.name || '')) continue;
+        const paints = [];
+        if (e.icon && Object.keys(e.icon).length) paints.push({ paintGroup: 'icon', paintProp: 'display', paintValue: 'off' });
+        if (e.label && Object.keys(e.label).length) paints.push({ paintGroup: 'label', paintProp: 'display', paintValue: 'off' });
+        if (paints.length) vm.setStyleProperties({ styleName: cur.name, styleType: cur.type, layerId: +layerId, stackId: +stackId, styleId: e.id, paints });
+      }
+    }
+    if (car) await vm.setPoiScale({ fontScale: 1.4 });   // 차 화면은 멀리서 보니 도로명 글자를 키운다(OpenFreeMap 경로와 같은 1.4배)
+  } catch (err) { console.warn('TMAP POI 정리 실패(지도는 그대로)', err); }
+}
+
+function tmapApi() {
+  let map = null, el = null, loaded = false, dark = false, car = false;
+  const TZ = z => z - 1;   // Leaflet 줌 → TMAP 줌(GL 512px 타일이라 한 단계 가깝다). 어댑터 밖은 모두 Leaflet 줌으로 쓴다
+  const waiting = [], styleWait = [], shapes = new Set(), handlers = { click: [], zoomend: [], moveend: [] };
+  const LL = ll => new Tmapv3.LatLng(ll[0], ll[1]);
+  const val = (p, k) => typeof p[k] === 'function' ? p[k]() : p[k] ?? p['_' + k];   // LatLng.lat() 은 메서드, 이벤트의 lngLat 은 속성(_lat)
+  // 테마를 바꾼 뒤 새 스타일이 다 받아질 때까지(StyleLoad, 안 오면 1.5초) 기다린다
+  const styleSettled = () => new Promise(r => { let done = false; const fin = () => { if (!done) { done = true; r(); } }; styleWait.push(fin); setTimeout(fin, 1500); });
+  // 벡터 도형(선·원)은 GL 레이어라 setMapType 의 스타일 재적재에 지워질 수 있다 → 도형마다 build/kill 을 두고 테마를 바꾼 뒤 다시 만든다
+  const shape = build => {
+    const parts = [];
+    const S = { build() { S.kill(); build(parts); }, kill() { parts.splice(0).forEach(p => p.setMap(null)); } };
+    shapes.add(S); if (loaded) S.build();
+    return S;
+  };
+  const api = {
+    kind: 'tmap',
+    // 스크립트는 키가 있을 때만 꽂는다(불러올 때마다 '지도보기 API' 1회로 센다). 로더가 document.write 로 본체를 부르면 그 자리를 script 태그로 바꿔 끼운다
+    load() {
+      return new Promise((res, rej) => {
+        webgl1OnWebgl2();
+        if (window.Tmapv3 && Tmapv3.Map) return res();
+        const dw = document.write;
+        document.write = html => {
+          const m = /src=["']([^"']+)["']/i.exec(String(html));
+          if (m) { const t = document.createElement('script'); t.src = m[1]; t.onerror = rej; document.head.appendChild(t); }
+        };
+        const s = document.createElement('script');
+        s.src = `https://apis.openapi.sk.com/tmap/vectorjs?version=1&appKey=${TMAP_KEY}`;
+        s.onerror = () => { document.write = dw; rej(new Error('TMAP 스크립트')); };
+        document.head.appendChild(s);
+        const t0 = Date.now(), poll = setInterval(() => {
+          if (window.Tmapv3 && Tmapv3.Map) { clearInterval(poll); document.write = dw; res(); }
+          else if (Date.now() - t0 > 15000) { clearInterval(poll); document.write = dw; rej(new Error('TMAP 시간 초과')); }
+        }, 50);
+      });
+    },
+    create(elId, o = {}) {
+      el = document.getElementById(elId); dark = !!o.dark; car = !!o.car;
+      // 크기는 #map 의 CSS(차 화면은 JS 로 넣은 px)를 그대로 쓴다. mapType 옵션은 생성자에서 무시돼 ConfigLoad 에서 setMapType 으로 건다
+      map = new Tmapv3.Map(el, { center: LL(o.center || [37.56668, 126.978433]), zoom: TZ(o.zoom || 15), naviControl: false, scaleBar: false });
+      map.on('ConfigLoad', async () => {
+        if (dark) { map.setMapType('NIGHT'); await styleSettled(); }
+        await tmapTidy(map, car);
+        loaded = true;
+        shapes.forEach(S => S.build());
+        waiting.splice(0).forEach(f => f());
+      });
+      map.on('StyleLoad', () => styleWait.splice(0).forEach(f => f()));
+      map.on('Click', e => { const g = e && e.data && e.data.lngLat; if (g) handlers.click.forEach(f => f([val(g, 'lat'), val(g, 'lng')])); });
+      map.on('ZoomEnd', () => handlers.zoomend.slice().forEach(f => f()));
+      map.on('MoveEnd', () => handlers.moveend.slice().forEach(f => f()));
+      return api;
+    },
+    ready(cb) { if (loaded) cb(); else waiting.push(cb); },
+    // 순정 야간 = 공식 NIGHT 테마. 스타일을 다시 받은 뒤 선·원을 다시 만든다(마커는 DOM 이라 남는다)
+    async setDark(d) {
+      dark = !!d;
+      if (!map || !loaded) return;   // 아직 ConfigLoad 전이면 그때 dark 를 건다
+      map.setMapType(dark ? 'NIGHT' : 'ROAD');
+      await styleSettled();
+      await tmapTidy(map, car);   // 분류 설정은 테마마다 따로라 다시 끈다
+      shapes.forEach(S => S.build());
+    },
+    fit(lls, o = {}) {
+      if (!lls.length || !map) return;
+      const [sw, ne] = geoBox(lls, o.pad || 0);
+      if (sw[0] === ne[0] && sw[1] === ne[1]) { map.setCenter(LL(sw)); map.setZoom(TZ(o.maxZoom || 17)); return; }   // 점 하나: Leaflet 처럼 maxZoom 으로
+      map.fitBounds(new Tmapv3.LatLngBounds(LL(sw), LL(ne)), { top: o.top || 0, right: o.right || 0, bottom: o.bottom || 0, left: o.left || 0 });
+      if (o.maxZoom != null) {   // fitBounds 에 maxZoom 이 없어 맞춘 뒤 줄인다(움직임이 끝난 뒤 한 번 더)
+        const clamp = () => { if (map.getZoom() > TZ(o.maxZoom)) map.setZoom(TZ(o.maxZoom)); };
+        clamp();
+        const once = () => { handlers.moveend.splice(handlers.moveend.indexOf(once), 1); clamp(); };
+        handlers.moveend.push(once);
+      }
+    },
+    size: () => ({ x: el ? el.offsetWidth : 0, y: el ? el.offsetHeight : 0 }),
+    invalidate() { if (map) map.resize(); },
+    getZoom: () => map.getZoom() + 1,
+    setView(ll, z) { map.setCenter(LL(ll)); map.setZoom(TZ(z)); },
+    inView(ll, pad = 0) {
+      const b = map.getBounds(), sw = b.getSouthWest(), ne = b.getNorthEast();
+      const s = val(sw, 'lat'), w = val(sw, 'lng'), n = val(ne, 'lat'), e = val(ne, 'lng'), dy = (n - s) * pad, dx = (e - w) * pad;
+      return ll[0] >= s - dy && ll[0] <= n + dy && ll[1] >= w - dx && ll[1] <= e + dx;
+    },
+    on(evt, cb) { if (handlers[evt]) handlers[evt].push(cb); },
+    // 퍽 = iconHTML 마커(가운데가 점). 마우스 툴팁·끌기는 TMAP 에 없어 뺀다(휴대폰은 지도 누르기로 옮긴다). zIndex 는 100 + z — 음수가 되면 지도 캔버스 뒤로 숨으니 z 는 -99 보다 크게
+    puck(o) {
+      const w = o.size, h = o.h || o.size;   // o.bottom: 아래 가운데가 위치(꼬리 달린 표지판)
+      const m = new Tmapv3.Marker({ position: LL(o.latlng), iconHTML: `<div class="${o.cls || ''}" style="width:${w}px;height:${h}px">${o.html}</div>`,
+        iconSize: new Tmapv3.Size(w, h), anchor: o.bottom ? 'bottom' : 'center', zIndex: 100 + (o.z || 0), map });
+      return { setLatLng: ll => m.setPosition(LL(ll)), remove: () => m.setMap(null) };
+    },
+    // 라벨 = iconHTML 마커. Tmapv3.Label 은 글자만·offset 없음이라 쓰지 않는다. Leaflet 툴팁의 6px 띄움까지 같게 더한다
+    label(o) {
+      const dir = labelDir(o);
+      const anchor = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[dir];
+      const gap = { top: [0, -6], bottom: [0, 6], left: [-6, 0], right: [6, 0] }[dir];
+      const m = new Tmapv3.Marker({ position: LL(o.latlng), iconHTML: `<div class="tmlbl ${o.cls || 'lbl'}" style="opacity:${o.opacity ?? 1}">${o.html}</div>`,
+        anchor, offset: new Tmapv3.Point((o.dx || 0) + gap[0], (o.dy || 0) + gap[1]), zIndex: 2000, map });
+      return { setLatLng: ll => m.setPosition(LL(ll)), remove: () => m.setMap(null) };
+    },
+    // 선: TMAP 은 테(outline)를 그리지 않아 더 굵은 선을 먼저 깐다. 점선은 strokeStyle "dash". 기본 불투명도 0.7 이라 늘 적어 준다
+    line(o) {
+      let lls = o.latlngs || [], key = JSON.stringify(lls);
+      const S = shape(parts => {
+        if (lls.length < 2) return;
+        for (const x of o.casing ? [o.casing, o] : [o])
+          parts.push(new Tmapv3.Polyline({ path: lls.map(LL), strokeColor: x.color, strokeWeight: x.weight, strokeOpacity: x.opacity ?? 1, strokeStyle: x === o && o.dash ? 'dash' : 'solid', map }));
+      });
+      return {
+        setLatLngs(v) { const k = JSON.stringify(v); if (k === key) return; key = k; lls = v; if (loaded) S.build(); },   // 같은 좌표면 다시 만들지 않는다(휴대폰은 1초마다 부른다)
+        remove() { S.kill(); shapes.delete(S); },
+      };
+    },
+    circle(o) {
+      const S = shape(parts => parts.push(new Tmapv3.Circle({ center: LL(o.latlng), radius: o.radius, strokeColor: o.color, strokeWeight: o.weight ?? 2, strokeOpacity: o.opacity ?? 1,
+        fillColor: o.fillColor || o.color, fillOpacity: o.fillOpacity ?? 0.2, map })));
+      return { remove() { S.kill(); shapes.delete(S); } };
+    },
+    // 화면 크기 고정 점 = 작은 iconHTML 마커(테 두께까지 L.circleMarker 와 같은 지름)
+    dot(o) {
+      const d = 2 * o.radius + (o.weight || 0);
+      const m = new Tmapv3.Marker({ position: LL(o.latlng), iconHTML: `<div style="width:${d}px;height:${d}px;box-sizing:border-box;border-radius:50%;background:${o.fillColor};border:${o.weight || 0}px solid ${o.color};opacity:${o.fillOpacity ?? 1}"></div>`,
+        iconSize: new Tmapv3.Size(d, d), anchor: 'center', zIndex: 90, map });
+      return { remove: () => m.setMap(null) };
+    },
+    group: mapGroup,
+    offlineBase() {},   // TMAP 은 자기 타일만 쓴다
+  };
+  return api;
+}
+
+let MapApi = USE_TMAP ? tmapApi() : leafletApi();
+// TMAP 스크립트를 못 받으면(키 오류·네트워크) Leaflet 바탕으로 돌아간다. body.tmap 은 TMAP 전용 CSS 의 스위치
+async function mapLoad() {
+  try { await MapApi.load(); } catch (e) { console.warn('TMAP 지도를 불러오지 못해 OpenFreeMap 바탕으로 그린다', e); MapApi = leafletApi(); await MapApi.load(); }
+  document.body.classList.toggle('tmap', MapApi.kind === 'tmap');
+}
+/* MAPAPI:END */
+const qs = new URLSearchParams(location.search);
+const TOKEN = qs.get('token') || '';
+let LANG = qs.get('lang') === 'en' ? 'en' : 'ko';
+const T = (ko, en) => LANG === 'en' ? en : ko;
+document.documentElement.lang = LANG;
+const SIREN_PNG = 'data:image/png;base64,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';
+const ICONS = {
+  medical: '<path d="M8 1h8v7h7v8h-7v7H8v-7H1V8h7Z" fill="currentColor"/>',
+  pin: '<path d="M12 1a8 8 0 0 0-8 8c0 6 8 14 8 14s8-8 8-14a8 8 0 0 0-8-8m0 5a3 3 0 1 1 0 6 3 3 0 0 1 0-6" fill="currentColor" fill-rule="evenodd"/>',
+  flag: '<path d="M3 1h3v2h16l-4 6 4 6H6v8H3Z" fill="currentColor"/>',
+  close: '<path d="m5 2 7 7 7-7 3 3-7 7 7 7-3 3-7-7-7 7-3-3 7-7-7-7Z" fill="currentColor"/>',
+};
+const icon = (n, cls = 'ic') => `<svg class="${cls}" viewBox="-1 -1 26 26" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const km = m => m == null ? '' : Math.abs(m) < 950 ? `${Math.round(Math.abs(m) / 100) * 100}m` : `${(Math.abs(m) / 1000).toFixed(1)}km`;
+// 시험용(GPS 없이): ?sim=<경로 위 거리 m>&kmh=<시속> 이면 위치 대신 그 거리에서 그 속도로 경로를 따라 달린다
+const SIM = qs.get('sim') != null ? {s: Number(qs.get('sim')) || 0, ms: (Number(qs.get('kmh')) || 100) / 3.6} : null;
+
+async function api(method, path, body) {
+  const r = await fetch(path, {method, headers: {'Content-Type': 'application/json'}, body: body ? JSON.stringify(body) : undefined});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(String(r.status)), {status: r.status, body: j});
+  return j;
+}
+
+// ---------------------------------------------------------------- 지도(link.html 과 같은 바탕·경로 선)
+const isDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+const baseStyle = async dark => {
+  const s = await (await fetch(`https://tiles.openfreemap.org/styles/${dark ? 'dark' : 'positron'}`)).json();
+  for (const l of s.layers) {
+    if (l.type !== 'symbol' || !l.layout?.['text-field']) continue;
+    l.layout['text-field'] = ['coalesce', ['get', 'name:ko'], ['get', 'name']];
+    if (dark) l.paint = { ...l.paint, 'text-color': '#9E9E9E', 'text-halo-color': 'rgba(12,12,12,1)' };
+  }
+  return s;
+};
+let mapOn = false, ROUTE = null, CUM = null, lastFit = 0;
+const mapReady = (async () => {
+  await mapLoad();
+  MapApi.create('map', { dark: isDark(), car: false, style: baseStyle, credit: '© OpenFreeMap © OpenMapTiles © OpenStreetMap' });
+  mapOn = true;
+  await new Promise(r => MapApi.ready(r));
+})();
+const layer = MapApi.group();
+function posAt(s) {
+  if (!ROUTE || s == null) return null;
+  const r = ROUTE.route;
+  if (!CUM) { CUM = [0]; for (let i = 1; i < r.length; i++) CUM.push(CUM[i - 1] + geoDist(r[i - 1], r[i])); }
+  for (let i = 1; i < r.length; i++) if (CUM[i] >= s) { const t = (s - CUM[i - 1]) / ((CUM[i] - CUM[i - 1]) || 1);
+    return [r[i - 1][0] + t * (r[i][0] - r[i - 1][0]), r[i - 1][1] + t * (r[i][1] - r[i - 1][1])]; }
+  return null;
+}
+async function drawRoute() {
+  await mapReady;
+  ROUTE = await api('GET', '/api/road/route');
+  MapApi.line({latlngs: ROUTE.route, color: '#0064FF', weight: 5, opacity: 1, casing: {color: '#0046B4', weight: 9, opacity: 1}});
+  MapApi.fit(ROUTE.route, {top: 20, right: 20, bottom: 20, left: 20});
+}
+function draw(v) {
+  if (!mapOn || !ROUTE) return;
+  layer.clear();
+  const pts = [];
+  const me = posAt(v.s);
+  if (me) {   // 내 위치 = 사이렌 표지(지도 link.html 과 같은 그림)
+    layer.add(MapApi.puck({latlng: me, html: `<img class="hzs" src="${SIREN_PNG}" alt="">`, size: 40, interactive: false, z: 1000}));
+    layer.add(MapApi.label({latlng: me, html: esc(T('구급차(나)', 'Ambulance (me)')), dx: 22, cls: 'tag', opacity: .9}));
+    pts.push(me);
+  }
+  const d = dest != null ? posAt(dest) : null;
+  if (d) {
+    layer.add(MapApi.puck({latlng: d, html: `<div class="pin">${icon('flag', '')}</div>`, size: 28, interactive: false, z: 900}));
+    layer.add(MapApi.label({latlng: d, html: esc(destLabel || T('목적지', 'Destination')), dx: 16, cls: 'tag', opacity: .9}));
+    pts.push(d);
+  }
+  if (pts.length && Date.now() - lastFit > 10000) { lastFit = Date.now(); MapApi.fit(pts, {pad: .4, maxZoom: 14}); }
+}
+
+// ---------------------------------------------------------------- 출동 상태
+let ME = '';
+let on = false, dest = null, destLabel = '', dest0 = null, gps = null, lastView = null, authFail = false, err = '';
+const now = () => Date.now() / 1000;
+
+async function join() {
+  try {
+    const r = await api('POST', '/api/road/join', {kind: 'ev', token: TOKEN, name: T('구급차', 'Ambulance'), lang: LANG, t: now()});
+    ME = r.me; lastView = r.view;
+  } catch (e) { if (e.status === 403) authFail = true; else err = T('허브에 연결할 수 없어요', 'Cannot reach the hub'); }
+}
+
+function body() {
+  const b = {me: ME, t: now(), on, dest_s: dest};
+  if (SIM) { b.s = SIM.s; b.speed = on ? SIM.ms : 0; }
+  else if (gps) { b.lat = gps.lat; b.lon = gps.lon; b.speed = gps.speed; }
+  return b;
+}
+
+async function send() {
+  if (!ME || authFail) return;
+  if (!SIM && !gps) { render(); return; }
+  try {
+    lastView = await api('POST', '/api/road/state', body()); err = '';
+    if (!lastView.ev) await join();                  // 허브가 도로를 비웠다(시연 다시 시작) — 다시 들어간다
+  } catch (e) { err = T('연결 중…', 'Connecting…'); }
+  render();
+}
+
+function setOn(x) {
+  on = x;
+  if (on) dest0 = null;
+  send();
+}
+function pick(i) {
+  const c = choices()[i];
+  dest = c ? c.s : null; destLabel = c ? c.name : ''; dest0 = null;
+  send();
+}
+// 목적지 고르기: 허브가 아는 사고 의심·공식 사고(내 앞), 또는 없음
+function choices() {
+  const hz = (lastView && lastView.hazards) || [];
+  return hz.filter(h => (h.type === 'INCIDENT' || (h.type === 'OFFICIAL' && h.official && h.official.type === 'ACCIDENT')) && h.ahead != null && h.ahead > 0)
+    .map(h => ({s: h.s, name: h.type === 'INCIDENT' ? T('사고 지점', 'Crash site') : esc(h.label), ahead: h.ahead}));
+}
+
+function render() {
+  const title = document.getElementById('title'), sub = document.getElementById('sub');
+  if (authFail) { title.textContent = T('인증 실패', 'Not authorized'); title.className = ''; sub.textContent = T('링크의 토큰을 확인하세요(구급차 전용 페이지)', 'Check the token in the link (ambulance-only page)'); document.getElementById('panel').innerHTML = ''; return; }
+  const ev = (lastView && lastView.ev) || {};
+  const nogps = !SIM && !gps;
+  title.textContent = !on ? T('대기 중', 'Standing by') : nogps ? T('위치 신호 없음', 'No position') : T('출동 중 · 위치 신호 보내는 중', 'Responding · sending position');
+  title.className = on && !nogps ? 'on' : '';
+  const parts = [];
+  if (nogps) parts.push(T('위치 권한을 허용해 주세요', 'Allow location access'));
+  if (on && ev.toDest != null) parts.push(T(`${esc(destLabel || '목적지')}까지 ${km(ev.toDest)}`, `${km(ev.toDest)} to ${esc(destLabel || 'destination')}`));
+  if (on && ev.live) parts.push(ev.v == null ? T('방향 재는 중', 'Measuring direction') : T(`앞차 ${ev.told}대에 알림`, `${ev.told} cars ahead alerted`));
+  if (err) parts.push(err);
+  sub.textContent = parts.join(' · ');
+  if (on && ev.toDest != null) { if (dest0 == null || ev.toDest > dest0) dest0 = ev.toDest; }
+  document.getElementById('prog').style.width = on && dest0 ? Math.max(0, Math.min(100, 100 * (1 - ev.toDest / dest0))) + '%' : '0';
+  const cs = choices();
+  const chips = cs.map((c, i) => `<button class="chip ${dest === c.s ? 'on' : ''}" onclick="pick(${i})">${icon('flag')} ${c.name} · ${T('전방', '')} ${km(c.ahead)}${T('', ' ahead')}</button>`).join('')
+    + `<button class="chip ${dest == null ? 'on' : ''}" onclick="pick(-1)">${icon('close')} ${T('목적지 없음', 'No destination')}</button>`;
+  document.getElementById('panel').innerHTML = `<div class="card">
+      <div class="row"><b>${T('알리는 차', 'Cars alerted')}</b><span>${on && ev.live ? ev.told : 0}${T('대', '')}</span></div>
+      <div class="row"><b>${T('사이렌을 들은 차', 'Cars that heard the siren')}</b><span>${ev.heard || 0}${T('대', '')}</span></div>
+      <div class="row"><b>${T('길을 비켜 준 차', 'Cars that made way')}</b><span>${ev.yielded || 0}${T('대', '')}</span></div></div>
+    <div class="card"><div class="head">${T('목적지', 'Destination')}</div><div>${chips}</div>
+      <p class="hint">${T('목적지를 정하면 구급차와 목적지 사이의 차에만 알려요', 'With a destination, only cars between you and it are alerted')}</p></div>
+    <div class="two"><button class="primary" ${on ? 'disabled' : ''} onclick="setOn(true)">${icon('medical')} ${T('출동 시작', 'Start response')}</button>
+      <button ${on ? '' : 'disabled'} onclick="setOn(false)">${T('출동 끝', 'End response')}</button></div>`;
+  document.getElementById('about').innerHTML = `<summary>${T('이 화면은', 'About')}</summary>
+    <p>${T('출동 중에는 1초마다 이 휴대폰의 위치를 길벗 허브에 보내요. 허브는 구급차 뒤가 아니라 앞, 같은 방향으로 5km 안에서 달리는 길벗 차에만 "후방 구급차 접근 중"을 알려요. 멈춰 있거나 반대 방향으로 달리면 알리지 않아요.',
+      'While responding, this phone sends its position to the Gilbeot hub every second. The hub alerts only Gilbeot cars ahead of you in the same direction within 5 km. Nothing is sent to drivers while you are stopped or driving the other way.')}</p>
+    <p>${T('시연 경로(경부고속도로) 한 줄만 알아요. 교차로·골목에서 만나는 차에게 미리 알리는 기능은 없어요.', 'Works on the demo highway route only. There is no warning for cars at intersections or side streets.')}</p>`;
+  if (lastView) draw(lastView);
+}
+
+if (!SIM && navigator.geolocation) navigator.geolocation.watchPosition(p => { gps = {lat: p.coords.latitude, lon: p.coords.longitude, speed: p.coords.speed || 0}; },
+  () => { gps = null; render(); }, {enableHighAccuracy: true, maximumAge: 1000});
+
+(async () => {
+  render();
+  try { await drawRoute(); } catch (e) { err = T('지도를 불러오지 못했어요', 'Map failed to load'); }
+  await join();
+  render();
+  setInterval(() => { if (SIM && on) SIM.s += SIM.ms; send(); }, 1000);
+})();
+</script>
+</body>
+</html>

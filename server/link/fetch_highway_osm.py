@@ -6,6 +6,7 @@
 import sys
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 BBOX = "36.78,127.00,37.48,127.25"   # 남,서,북,동
 
@@ -28,7 +29,7 @@ def main(out_path):
         try:
             req = urllib.request.Request(url, data=body, headers={"User-Agent": "Meeos-Tago-contest/1.0"})
             data = urllib.request.urlopen(req, timeout=240).read()
-            open(out_path, "wb").write(data)
+            Path(out_path).write_bytes(data)
             print(f"{url} -> {out_path} {len(data)} bytes")
             return
         except Exception as e:  # noqa: BLE001

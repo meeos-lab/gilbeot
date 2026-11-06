@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tago 도로 링크</title>
+<title>길벗 도로 링크</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <style>
@@ -37,17 +37,17 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="top" class="hud"><h1><b>Tago</b> 도로 링크</h1><p id="route">경부고속도로 하행 · 연결 중…</p></div>
+<div id="top" class="hud"><h1><b>길벗</b> 도로 링크</h1><p id="route">경부고속도로 하행 · 연결 중…</p></div>
 <div id="advice" class="hud"><small>정체를 녹이는 권장 속도</small><span id="adv">–</span></div>
 <div id="stats" class="hud">
-  <div class="stat blue"><small>연결된 Tago 차</small><span id="nCars">0</span></div>
+  <div class="stat blue"><small>연결된 길벗 차</small><span id="nCars">0</span></div>
   <div class="stat amber"><small>공유된 신호</small><span id="nSig">0</span></div>
   <div class="stat green"><small>내 차 속도</small><span id="mySpd">–</span></div>
 </div>
 <div id="cam"><button data-m="drone" class="on">드론</button><button data-m="all">앞 12km 전체</button><button data-m="chase">내 차 뒤</button></div>
 <div id="feed" class="hud"></div>
 <div id="legend" class="hud">
-  <div><i style="background:#2f80ff"></i>내 차</div><div><i style="background:#e9eef5"></i>다른 Tago 차(익명)</div>
+  <div><i style="background:#2f80ff"></i>내 차</div><div><i style="background:#e9eef5"></i>다른 길벗 차(익명)</div>
   <div><i style="background:#ff9f1a"></i>가족 그룹</div><div><i style="background:#ff3b30"></i>급제동·사고 의심</div>
   <div><i style="background:#ffb020"></i>정체 · 낙하물(급조향)</div><div><i style="background:#38bdf8"></i>비(와이퍼) · 침수(되돌아감)</div>
   <div><i style="background:#8b5cf6"></i>연기(내기순환) · 긴 내리막(브레이크)</div>
@@ -222,7 +222,7 @@ function makeWave(p) {
   waves.push({m, ring, s0: p.s, t0: performance.now(), type: p.type});
 }
 
-// 긴급차량(시연 구급차 — Tago 차가 아니다): 경광등이 번갈아 깜빡이고, 앞 250m 안의 차들은 길을 터 준다(1차로는 왼쪽, 나머지는 오른쪽)
+// 긴급차량(시연 구급차 — 길벗 차가 아니다): 경광등이 번갈아 깜빡이고, 앞 250m 안의 차들은 길을 터 준다(1차로는 왼쪽, 나머지는 오른쪽)
 const EMS_X = -0.85;                                                   // 1·2차로 사이로 달린다
 let ems = null;
 function makeEms() {
@@ -297,7 +297,7 @@ function sync() {
     makeWave(p);
     const [name, color] = TYPE[p.type] || ['신호', 0x4d9bff];
     const SIG = {DEBRIS: '급조향', SMOKE: '내기순환', DOWNHILL: '브레이크 20초', BLOCKED: '되돌아감', SIREN: '사이렌(마이크)', CHARGER_FAULT: '충전 실패', CHARGER_WAIT: '충전 대기'};
-    pushFeed(p.type + (p.car === ME), `${SIG[p.type] || name} 신호 · ${p.car === ME ? '내 차' : '익명 Tago 차'} → ${p.type === 'SIREN' ? '앞차들에게(길 터 주기)' : '뒤따르는 차들에게'}`, '#' + color.toString(16).padStart(6, '0'));
+    pushFeed(p.type + (p.car === ME), `${SIG[p.type] || name} 신호 · ${p.car === ME ? '내 차' : '익명 길벗 차'} → ${p.type === 'SIREN' ? '앞차들에게(길 터 주기)' : '뒤따르는 차들에게'}`, '#' + color.toString(16).padStart(6, '0'));
   }
   document.getElementById('nCars').textContent = Math.max(0, world.cars.length - (ME ? 1 : 0));
   document.getElementById('nSig').textContent = sigCount;
