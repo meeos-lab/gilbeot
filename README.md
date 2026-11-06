@@ -28,7 +28,7 @@
 |---|---|
 | 앱 이름 | 길벗 (Gilbeot), 패키지 `ai.meeos.gilbeot` |
 | APK | [`apk/Meeos_Gilbeot_release.apk`](apk/) — 허브를 앱 안에 넣어 단독 실행 |
-| 논문 초고 | [`docs/paper/gilbeot-paper.pdf`](docs/paper/gilbeot-paper.pdf) — 권고 방식의 사전 등록 시뮬레이션 연구 |
+| 논문 초고 | [`docs/paper/gilbeot-paper.pdf`](docs/paper/gilbeot-paper.pdf) — 권고 방식의 사전 등록 시뮬레이션 연구 · [4쪽 요약본](docs/paper/gilbeot-paper-summary.pdf) |
 | 개발 보고서 | 접수 서류로 별도 제출 |
 
 ## 목차
