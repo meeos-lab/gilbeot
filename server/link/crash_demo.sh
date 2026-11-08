@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 사고 판단 실측(두 에뮬레이터): 앞차(5554) 시속 90 주행 → 충돌(impact_sim 25,0) → "괜찮으세요?" 30초 무응답 → 뒷차(5556, 4.5km 뒤) "사고 의심 · 교통 막힘 주의"
-# 대상 APK: 기본 ai.meeos.tago(두 기능 debug·픽업판). 길벗판은 TAGO_PKG=ai.meeos.gilbeot bash <이 대본> — 액티비티 이름은 판과 무관하게 ai.meeos.tago.MainActivity
+# 대상 APK: 기본 ai.meeos.tago(두 기능 debug 판). 길벗판은 TAGO_PKG=ai.meeos.gilbeot bash <이 대본> — 액티비티 이름은 판과 무관하게 ai.meeos.tago.MainActivity
 A=emulator-5554; B=emulator-5556; PKG=${TAGO_PKG:-ai.meeos.tago}; APP=$PKG/ai.meeos.tago.MainActivity; VC=http://127.0.0.1:8088
 OUT=${TAGO_CRASH_OUT:-/tmp/tago_crash}
 mkdir -p $OUT

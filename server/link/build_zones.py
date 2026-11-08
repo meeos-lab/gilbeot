@@ -65,7 +65,7 @@ def overpass(q):
     for url in ("https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter",
                 "https://maps.mail.ru/osm/tools/overpass/api/interpreter"):
         try:
-            req = urllib.request.Request(url, data=body, headers={"User-Agent": "Meeos-Tago-contest/1.0"})
+            req = urllib.request.Request(url, data=body, headers={"User-Agent": "Meeos-contest/1.0"})
             return json.loads(urllib.request.urlopen(req, timeout=240).read())
         except Exception as e:  # noqa: BLE001
             print(f"{url} 실패: {e}")

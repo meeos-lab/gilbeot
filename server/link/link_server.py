@@ -1,6 +1,6 @@
-"""Tago 도로 링크(차대차) 기준 엔진 + 중계 서버.
+"""길벗 도로 링크(차대차) 기준 엔진 + 중계 서버.
 
-주행 중인 모든 Tago 차가 익명으로 연결된다. 앞차가 겪은 급제동·정체·사고 의심·폭우를 같은 길 뒤쪽 차에 알리고,
+주행 중인 모든 길벗 차가 익명으로 연결된다. 앞차가 겪은 급제동·정체·사고 의심·폭우를 같은 길 뒤쪽 차에 알리고,
 앞차들의 속도·와이퍼로 '앞길 미리보기'(10km, 500m 칸), 정체를 녹이는 권장 속도, 비 예보를 만든다.
 가족 그룹은 선택 기능: 위험은 같은 도로 링크에서 오고, 그룹 차끼리는 이름·위치를 서로 보고 휴게소를 같이 정한다.
 앱 내장 엔진(app/.../engine/LinkHub.kt)이 같은 규칙을 따르고, check_link_parity.py로 결과를 맞춘다.
@@ -53,6 +53,14 @@ for _a, _b in zip(ROUTE, ROUTE[1:]):
 LENGTH = CUM[-1]
 
 
+def fnv1a32(text):
+    """FNV-1a 32비트(UTF-8) — 우회 배정 추첨. 앱 LinkHub.fnv1a32 와 같은 값(같은 입력이면 같은 배정)"""
+    h = 0x811C9DC5
+    for b in text.encode("utf-8"):
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
 def project(p):
     """점 → 경로 위 거리 s(m)"""
     return project_d(p)[0]
@@ -102,6 +110,8 @@ for _e in ROUTE_FILE.get("evStations", []):
     CHG_STAT_IDS.setdefault(float(_e["rest"]), []).append(str(_e["statId"]))
 # 구역(설계 10판 §8, build_zones.py): 사고 다발 구간(도로공사 사고 이력)·터널·교량(OSM). 경로 파일에 없으면 빈 목록
 ZONES = ROUTE_FILE.get("zones", [])
+# 나들목(build_junctions.py): 우리 차로의 IC 진출 지점(OSM motorway_junction, 분기점·휴게소 제외), s 오름차순. 최소 우회 안내가 쓴다
+JUNCTIONS = sorted(ROUTE_FILE.get("junctions", []), key=lambda j: j["s"])
 
 # ---------------------------------------------------------------- 규칙
 ALERT_RANGE = 10000.0        # 내 앞 10km 안의 위험만 알린다
@@ -215,6 +225,18 @@ UNITS = ("km", "mi")         # join 의 units 로 받는 값(그 밖·없음은 
 BIN_M, BINS = 500.0, 20      # 앞길 미리보기: 500m 칸 20개(10km)
 JAM_KMH = 40                 # 칸 평균이 이보다 느리고 차가 2대 이상이면 정체 칸
 ADVISE_KMH = 80              # 정체 꼬리 권장 속도는 거리와 무관하게 80 하나(docs/sim-report.md 3.10: 단계 감속은 고속 접근 상충을 늘렸다)
+# 최소 우회 안내(FR-G-36, 11-08 통합 기준 — 시뮬레이션 M-e 의 server/link/sim/detour_rules.py 와 같은 값, tools/check_engine_consts.py 가 대조):
+# 막힘 확정(사고 의심 INCIDENT·정체 CONGESTION) 상류이고 다음 나들목까지 DETOUR_MIN_IC_M 이상, 막힘까지 DETOUR_MAX_INC_M 이하면
+# 같은 막힘에 한 번 권한다. 어느 나들목으로 나갈지는 순정 내비 재탐색이 정한다(자동 경로 변경 없음)
+DETOUR_MIN_IC_M = 1000.0     # 다음 나들목까지 이만큼 남아야 권한다(더 가까우면 차로 변경·진출 여유가 모자라 권하지 않는다)
+DETOUR_MAX_INC_M = 10000.0   # 막힘이 이보다 멀면 권하지 않는다(가는 동안 풀릴 수 있다)
+DETOUR_DELAY_S = 2.0         # 확정 → 발화 상한(초). 허브는 확정된 보기에 바로 싣고 앱은 말 예산과 무관하게 바로 말한다(앱이 지연을 재서 기록)
+ACK_MAX = 64                 # 차마다 기억하는 우회 권고 응답 수 상한(막힘 위험 id 단위)
+REST_LATERAL_M = 30.0        # 휴게소 제외: 휴게소 점 근처에서 정지한 차라도 경로 선에서 옆으로 이만큼 벗어나야(진입 램프·주차장) 휴게소 차로 본다
+DETOUR_P_MIN, DETOUR_P_MAX = 0.2, 0.8   # 허브가 정하는 우회 비율 p 의 범위(앱 차 중 이 비율을 우회에 배정, 나머지는 본선 유지)
+DETOUR_P_FIXED = 0.5         # 지금 허브가 쓰는 p — 우회로 용량을 몰라 고정(통합 세션 11-08). 용량을 알게 되면 시뮬 (d) 의 용량/유량식으로 바꿀 수 있다
+DETOUR_CLEAR_GRACE_S = 300.0  # 해제 = 확정 해제 또는 처리 종료 + 이 값 중 이른 쪽. 허브에서는 처리 종료(공식 endTime)가 곧 사고 의심 해제라
+                              # (clock 의 '공식 해제' 규칙) 늘 확정 해제가 먼저다 — 코드가 읽지 않는 기준값(시뮬레이션과 같게 둔다)
 PULSE_SEC = 8.0              # 관제 화면: 최근 8초의 보고를 '신호'로 보여 준다
 MAX_STEPS = 600              # 시연 도로를 한 번에 돌리는 최대 걸음(초)
 GONE_SEC = 300.0             # 5분(ACTIVE_SEC의 5배) 넘게 소식 없는 차: 남아 있는 보고(정체·폭우 등)를 거둔다. 차가 꽉 차면 도로에서 뺀다
@@ -389,7 +411,7 @@ def lang_of(x):
 
 
 # ---------------------------------------------------------------- 시연 도로(설 연휴 귀성, 경부고속도로 하행)
-# 앞쪽에서 사고(차 2대 멈춤) → 그 뒤로 1.5km 정체 → 더 앞에는 비 구간. 모르는 Tago 차 14대가 이 도로를 1초 단위로 달린다.
+# 앞쪽에서 사고(차 2대 멈춤) → 그 뒤로 1.5km 정체 → 더 앞에는 비 구간. 모르는 길벗 차 14대가 이 도로를 1초 단위로 달린다.
 # 거리는 시연을 시작한 차의 위치 s0 기준, 시간은 시작 시각 t0 기준. 경로 위 이동은 DEMO_SCALE배로 압축한다
 DEMO_SCALE = 4.0
 JAM_TAIL, JAM_HEAD = 5000.0, 6500.0   # 정체 구간(꼬리, 머리) — 앱 LinkHub 와 같은 이름
@@ -409,8 +431,8 @@ DEMO_CARS = [("anon", -2500, 24.0), ("anon", -1200, 25.5), ("anon", 1500, 23.5),
              ("crash", 6420, 0.0), ("anon", 7600, 25.0), ("anon", 9600, 24.5), ("anon", 11500, 25.0)]
 # 가족 그룹 시연(선택): 삼촌은 앞에서 같은 길(정체에 걸린다), 이모는 뒤
 DEMO_FAMILY = [("삼촌", "Uncle", "아반떼 · 흰색", "white Avante", 3000.0, 25.0, 41), ("이모", "Aunt", "쏘렌토 · 검정", "black Sorento", -1500.0, 24.0, None)]
-# 구급차: AMB_K초에 정체 꼬리 뒤에서 나타나 사고 지점으로 간다. 근처(HEAR_M) Tago 차의 마이크가 사이렌을 듣고 5초마다 보고한다.
-# 같이 나타나는 모르는 Tago 차 5대가 구급차 바로 앞을 달린다(처음 듣는 차들). 사고 지점에 닿으면 사이렌을 끈다
+# 구급차: AMB_K초에 정체 꼬리 뒤에서 나타나 사고 지점으로 간다. 근처(HEAR_M) 길벗 차의 마이크가 사이렌을 듣고 5초마다 보고한다.
+# 같이 나타나는 모르는 길벗 차 5대가 구급차 바로 앞을 달린다(처음 듣는 차들). 사고 지점에 닿으면 사이렌을 끈다
 AMB_K = 50
 AMB_OFF = 500.0              # 시작 위치(시연 시작 지점 기준)
 AMB_MS, AMB_JAM_MS = 33.0, 14.0   # 120km/h, 정체 안에서는 50km/h(차들이 비켜 준다)
@@ -475,12 +497,13 @@ class Hub:
             cid = "c" + self._id(12)
         while any(x["pub"] == pub for x in self.cars):
             pub = "v" + self._id(8)
-        c = {"id": cid, "pub": pub, "name": name, "car": desc, "kind": kind, "lang": lang, "s": None, "speed": 0.0, "soc": None,
+        c = {"id": cid, "pub": pub, "name": name, "car": desc, "kind": kind, "lang": lang, "s": None, "speed": 0.0, "off": None, "offHint": None, "acks": {}, "soc": None,
              "wiper": "", "temp": None, "t": self.now, "slowSince": None, "stopSince": None, "brake": None, "active": set(),
              "demo": demo, "group": None, "holdSince": None, "gone": False, "st": None, "vs": None, "sirenAt": None,
              "inc": None, "joinT": self.now, "strongAt": None, "strongH": None,
              "on": False, "dest": None, "bt": [], "yieldAt": None,   # on·dest·bt: 긴급차량(kind "ev") 출동 여부·목적지·최근 위치, yieldAt: 시연 차가 비킨 시각
-             "units": "km", "limit": None, "skew": None}             # units: 거리 단위(join), limit: 순정 내비 제한속도 km/h, skew: 시계 오차(초, 없으면 None)
+             "units": "km", "limit": None, "skew": None,             # units: 거리 단위(join), limit: 순정 내비 제한속도 km/h, skew: 시계 오차(초, 없으면 None)
+             "with": None}                                           # with: 동승(ADR-47) — 위치 없는 참가자가 '이 차에 타요'로 고른 일행 차 id, 보기는 그 차 기준
         self.cars.append(c)
         return c
 
@@ -587,10 +610,17 @@ class Hub:
         c = self.car(body.get("me"))
         if not c:
             return
+        if body.get("lat") is not None and body.get("lon") is not None:
+            ps, c["off"] = project_d(xy(float(body["lat"]), float(body["lon"])))   # off: 경로까지 거리(m) — 우회를 따랐는지(offRoute)
+            if body.get("s") is None:
+                c["s"] = ps
         if body.get("s") is not None:
             c["s"] = float(body["s"])
-        elif body.get("lat") is not None and body.get("lon") is not None:
-            c["s"] = project(xy(float(body["lat"]), float(body["lon"])))
+        if isinstance(body.get("offRoute"), bool):
+            c["offHint"] = body["offRoute"]              # 차가 아는 경로 이탈(휴게소 진입 등) — 위경도가 없을 때 휴게소 제외에 쓴다
+        ack = body.get("detourAck")
+        if isinstance(ack, dict) and ack.get("hazard") and ack.get("ack") in ("accepted", "declined") and len(c["acks"]) < ACK_MAX:
+            c["acks"][str(ack["hazard"])] = ack["ack"]   # 우회 권고 수락·거절만(준수 점수는 차 안에만 — 받지 않는다)
         if body.get("speed") is not None:
             c["speed"] = float(body["speed"])
         for k in ("soc", "temp"):
@@ -641,7 +671,7 @@ class Hub:
         if c["s"] is None:
             return
         now, v = self.now, c["speed"]
-        if v < STOP_MS and self._rest_near(c["s"]):     # 휴게소에 세운 차(충전·휴식)는 정체·사고 의심의 근거가 아니다
+        if v < STOP_MS and self._rest_near(c["s"]) and self._in_rest(c):   # 휴게소에 세운 차(충전·휴식)는 정체·사고 의심의 근거가 아니다
             for typ in ("CONGESTION", "INCIDENT"):
                 if typ in c["active"]:
                     self._clear(c, typ)
@@ -1097,6 +1127,16 @@ class Hub:
         """차 위치 500m 안의 휴게소(충전기가 있는 곳) — 없으면 None"""
         return min((r for r in REST if r["kind"] == "services" and abs(r["s"] - s) <= CHARGER_NEAR), key=lambda r: abs(r["s"] - s), default=None)
 
+    def _in_rest(self, c):
+        """휴게소 안(진입 램프·주차장)인가 — 본선 위 정차와 구분한다(11-08, 기흥휴게소→기흥IC 사고 밀도 최고 구간의 사고를 지우던 문제).
+        위경도가 있으면 경로 선에서 옆으로 REST_LATERAL_M 이상, 없으면 차가 보낸 경로 이탈(state offRoute),
+        그것도 없으면 휴게소로 본다(이전 규칙 — 위경도 없는 차가 휴게소에 여럿 서서 정체를 만들지 않게)"""
+        if c["off"] is not None:
+            return c["off"] >= REST_LATERAL_M
+        if c["offHint"] is not None:
+            return c["offHint"]
+        return True
+
     def _report(self, c, typ, value, s=None, rest=None):
         now = self.now
         s = c["s"] if s is None else s
@@ -1109,8 +1149,7 @@ class Hub:
                 if typ == "SIREN" and c["id"] not in h["reporters"]:   # 이 차가 처음 들었다 = 긴급차량이 여기 가까이 왔다
                     h["track"].append((now, s))
                     h["s"] = s
-                if typ == "SIREN":
-                    h["cleared"] = None                   # 비컨이 꺼진 위험도 마이크 보고가 다시 살린다
+                h["cleared"] = None                       # 새 보고가 합쳐지면 해제 표시를 지운다(전에는 긴급차량만 — 정체 등은 해제 + TTL 에 지워지고 다시 보고할 수 없었다)
                 h["reporters"][c["id"]] = now
                 h["last"], h["value"] = now, value
                 return h
@@ -1280,8 +1319,8 @@ class Hub:
 
     def _ambulance(self, k):
         """구급차: 정체 꼬리 뒤에서 나타나 사고 지점으로. 근거는 시연 호출의 ems 로 고른다(기본 셋 다):
-        beacon = 구급차가 kind "ev" 차로 위치 신호를 보낸다(목적지 = 사고 지점), mic = 사이렌이 들리는 Tago 차가 5초마다 보고(차 안 마이크),
-        yield = 구급차가 150 m 뒤로 다가온 Tago 차가 한 번 비킨다(YIELD)"""
+        beacon = 구급차가 kind "ev" 차로 위치 신호를 보낸다(목적지 = 사고 지점), mic = 사이렌이 들리는 길벗 차가 5초마다 보고(차 안 마이크),
+        yield = 구급차가 150 m 뒤로 다가온 길벗 차가 한 번 비킨다(YIELD)"""
         d = self.demo
         ems = d["ems"]
         if k == AMB_K:
@@ -1460,6 +1499,8 @@ class Hub:
         c["group"] = gid
         if c["id"] not in g["members"]:
             g["members"].append(c["id"])
+        if body.get("ride") is True and g["journey"]["ride"] != c["id"]:
+            c["with"] = g["journey"]["ride"]             # 동승으로 합류: 처음에는 그룹을 만든 차(여정의 타는 차) 기준, 칩으로 바꾼다
         self._glog(g, f"{c['name']} 님이 합류했어요", f"{c['name']} joined")
         return g, c
 
@@ -1619,6 +1660,7 @@ class Hub:
             return
         j = g["journey"]
         j["ride"], j["planned"], j["changed"] = r["id"], None, None
+        c["with"] = None if r is c else r["id"]          # 고른 사람 자신도 그 차에 탄다(동승 기준, ADR-47)
         self._glog(g, f"{c['name']}: {r['name']} 차에 타요", f"{c['name']}: riding in {r['name']}'s car")
         self._journey(g)
 
@@ -1629,18 +1671,31 @@ class Hub:
         if self._member(g, body) and j["changed"]:
             j["planned"], j["changed"] = j["changed"]["to"], None
 
+    def _ride_ref(self, me):
+        """보기의 기준 차(ADR-47): 내 위치(s)가 없고, 같은 그룹의 일행 차에 동승한다고 골랐고, 그 차의 위치가 살아 있으면 그 차. 아니면 나.
+        휴대폰 웹 참가는 HTTP 시연 주소에서 브라우저가 GPS 를 막고, 실제 GPS 도 시연 경로 밖이라 뜻이 없다 → 탄 차의 안내를 그대로 본다"""
+        if not me or me["s"] is not None or not me["with"]:
+            return me
+        h = self.car(me["with"])
+        if h is None or h["s"] is None or h["gone"] or h["group"] != me["group"] or self.now - h["t"] > ACTIVE_SEC:
+            return me
+        return h
+
     # ---- 보기(차 한 대 기준)
     def view(self, mid):
         self._scan_comm_loss()
         me = self.car(mid)
         lang = me["lang"] if me else "ko"
         self.cur_units = me["units"] if me else "km"
-        my_s = me["s"] if me and me["s"] is not None else None
-        my_v = me["speed"] if me else 0.0
+        # 동승(ADR-47): 내 위치가 없고 일행 차에 타고 있으면 위험·앞길·휴게소는 그 차(ref) 기준 — 그 차 화면과 같은 안내. 말·단위·그룹은 내 것
+        ref = self._ride_ref(me)
+        rid = ref["id"] if ref else mid
+        my_s = ref["s"] if ref and ref["s"] is not None else None
+        my_v = ref["speed"] if ref else 0.0
         g = self.groups.get(me["group"]) if me and me["group"] else None
         mine = set(g["members"]) if g else set()
         # 긴급차량 비컨(kind "ev")은 길벗 차가 아니다: 주변 차 수·앞길 미리보기에 넣지 않는다
-        others = [c for c in self.cars if c["id"] != mid and c["s"] is not None and self.now - c["t"] <= ACTIVE_SEC and not c["gone"] and c["kind"] != "ev"]
+        others = [c for c in self.cars if c["id"] not in (mid, rid) and c["s"] is not None and self.now - c["t"] <= ACTIVE_SEC and not c["gone"] and c["kind"] != "ev"]
         nearby = 0 if my_s is None else len([c for c in others if abs(c["s"] - my_s) <= ALERT_RANGE])
         hazards = []
         for h in self.hazards:
@@ -1652,19 +1707,19 @@ class Hub:
                 evc, wave, ny = self._ev(h), self._wave(h), len(self._yields_live(h))
                 if evc is None and not reps and not ny:
                     continue                             # 비컨이 꺼졌고 마이크·비킴 근거도 없다
-                if evc is not None and evc["id"] == mid:
+                if evc is not None and evc["id"] == rid:
                     continue                             # 구급차 자신에게는 알리지 않는다
-                if reps == [mid] and evc is None and wave is None:
+                if reps == [rid] and evc is None and wave is None:
                     continue                             # 나만 들은 사이렌(비컨·물결 없이)은 나에게 안 알린다
             else:
                 if not h["reporters"] and h["cleared"] is not None:
                     continue
-                if reps == [mid]:
+                if reps == [rid]:
                     continue                             # 나만 보고한 것은 나에게 안 알린다
             hs, hv = self._ev_pos(h) if siren else (h["s"], None)
             ahead = None if my_s is None else hs - my_s
-            named = [self.car(r)["name"] for r in (g["members"] if g else []) if r in h["reporters"] and r != mid]   # 일행 합류 순서(차 id는 무작위라 id 순서는 뜻이 없다)
-            anon = len([r for r in reps if r not in mine and r != mid])
+            named = [self.car(r)["name"] for r in (g["members"] if g else []) if r in h["reporters"] and r != rid]   # 일행 합류 순서(차 id는 무작위라 id 순서는 뜻이 없다)
+            anon = len([r for r in reps if r not in mine and r != rid])
             inc_score = max(h.get("score", {}).values(), default=0) if h["type"] == "INCIDENT" else 0
             strong = h["type"] == "INCIDENT" and any(self._strong(r, h) for r in reps)
             off = self._official_near(h["s"]) if h["type"] == "INCIDENT" else None   # 공식 돌발 ±2 km = 공식 확인
@@ -1704,7 +1759,7 @@ class Hub:
                 mv = EV_MOVE if evc is not None else 0.0      # 비컨은 GPS 흔들림만큼 여유를 둔다
                 item["oncoming"] = hv is not None and hv < -mv
                 behind = None if ahead is None else -ahead
-                closing = None if hv is None or me is None else hv - (me["vs"] if me["vs"] is not None else my_v)
+                closing = None if hv is None or ref is None else hv - (ref["vs"] if ref["vs"] is not None else my_v)
                 eta = behind / closing if behind is not None and closing is not None and closing > 1 and behind > 0 else None
                 item["eta"] = None if eta is None else rnd(eta)
                 item["evidence"] = [x for x, ok in (("beacon", evc is not None), ("mic", bool(reps)), ("yield", wave is not None)) if ok]
@@ -1776,7 +1831,7 @@ class Hub:
                 del h["say"]                             # 같은 곳의 덜 중요한 위험은 화면에만
             else:
                 spoken.append(h)
-        ahead = self._ahead(lang, my_s, my_v, others, hazards, me["limit"] if me else None) if my_s is not None else None
+        ahead = self._ahead(lang, my_s, my_v, others, hazards, ref["limit"] if ref else None) if my_s is not None else None
         rest_next = None
         if my_s is not None:
             r = next((r for r in REST if r["s"] > my_s), None)
@@ -1784,14 +1839,49 @@ class Hub:
                 rest_next = {"name": r["name"] if lang == "ko" else r["nameEn"], "kind": r["kind"], "dist": rnd(r["s"] - my_s),
                              "charger": self._charger_at(r)}
         group = self._group_view(g, mid, lang, my_s) if g else None
-        risk = self._risk(me, my_s, hazards, ahead)
+        risk = self._risk(ref, my_s, hazards, ahead)
         out = {"me": mid, "lang": lang, "now": r1(self.now), "s": None if my_s is None else rnd(my_s), "routeLength": rnd(LENGTH), "risk": risk,
-               "nearby": nearby, "hazards": hazards, "zones": self._zones_view(lang, me, my_s), "ahead": ahead, "restNext": rest_next, "restHere": self._rest_here(lang, my_s), "group": group,
+               "nearby": nearby, "hazards": hazards, "zones": self._zones_view(lang, ref, my_s), "ahead": ahead, "restNext": rest_next, "restHere": self._rest_here(lang, my_s), "group": group,
                "brief": self._brief(lang, nearby, group, rest_next), "demo": self.demo is not None,
-               "clockSkew": me["skew"] if me else None, "units": self.cur_units}   # clockSkew: 내 시계 오차(초, 없으면 null) — 앱은 기록만
+               "clockSkew": me["skew"] if me else None, "units": self.cur_units,   # clockSkew: 내 시계 오차(초, 없으면 null) — 앱은 기록만
+               "seenFrom": None if ref is me else {"id": self._pid(ref, mid), "name": ref["name"]},   # 동승: 이 보기의 기준 차(없으면 null = 내 위치)
+               "detour": self._detour(lang, my_s, hazards, me),   # 최소 우회 안내(없으면 null)
+               "offRoute": None if not me or me["off"] is None else me["off"] > OFFICIAL_OFFROUTE}   # 내 위경도가 경로에서 1 km 넘게 벗어났나(위경도를 안 보내면 null)
         if me and me["kind"] == "ev":
             out["ev"] = self._ev_view(me, others)
         return out
+
+    def _detour(self, lang, my_s, hazards, me):
+        """최소 우회 안내(FR-G-36, 11-08 통합 기준 = 시뮬레이션 detour_rules.py): 앞 DETOUR_MAX_INC_M 안의 가장 가까운 확정 막힘
+        (사고 의심 INCIDENT · 정체 CONGESTION)이 있고, 내 다음 나들목(내 앞 첫 IC)까지 DETOUR_MIN_IC_M 이상이면 권고. 아니면 None.
+        해제: 막힘 확정이 풀리면 보기에서 빠져 거둔다(공식 endTime 이면 그 순간 사고 의심도 해제 — DETOUR_CLEAR_GRACE_S 보다 늘 먼저).
+        어느 나들목으로 나갈지는 순정 내비 재탐색이 정한다 — 문장에 나들목 이름이 없다. id = 막힘 위험 id(같은 막힘에 한 번 말한다)"""
+        if my_s is None:
+            return None
+        blocks = [h for h in hazards if h["type"] in ("INCIDENT", "CONGESTION") and h["confirmed"]
+                  and h["ahead"] is not None and 0 < h["ahead"] <= DETOUR_MAX_INC_M]
+        if not blocks:
+            return None
+        b = min(blocks, key=lambda h: (h["ahead"], h["id"]))
+        j = next((x for x in JUNCTIONS if x["s"] > my_s), None)
+        if j is None or j["s"] - my_s < DETOUR_MIN_IC_M:
+            return None                              # 다음 나들목이 없거나 너무 가깝다(차로 변경·진출 여유 부족)
+        if j["s"] >= b["s"]:
+            return None                              # 다음 나들목이 막힘 뒤 — 나가려면 막힘을 지나야 한다(시뮬 detour_rules.eligible 과 같다)
+        d = b["ahead"]
+        p = self._detour_p(b)
+        assign = "detour" if me and fnv1a32(f"{me['id']}:{b['id']}") / 4294967296.0 < p else "stay"
+        return {"id": b["id"], "hazard": b["id"], "inc": d, "reason": "INCIDENT" if b["type"] == "INCIDENT" else "JAM",
+                "ic": j["id"], "icDist": rnd(j["s"] - my_s), "lat": j["lat"], "lon": j["lon"],
+                "p": p, "assign": assign, "ack": me["acks"].get(b["id"]) if me else None,
+                "say": L(lang, f"전방 {self.km_text(lang, d)} 막힘 확정. 우회 경로를 확인하세요.",
+                         f"Road blocked {self.km_text(lang, d)} ahead, confirmed. Check your route for a detour.")}
+
+    @staticmethod
+    def _detour_p(b):
+        """우회 비율 p(앱 차 중 우회에 배정하는 몫) = DETOUR_P_FIXED. 허브는 우회로 여유 용량·본선 전체 유량을 모른다 —
+        알게 되면 시뮬 (d) 처럼 clamp(여유 용량 / 도착 유량, DETOUR_P_MIN, DETOUR_P_MAX) 로 바꿀 수 있다(그때 b 의 위치·종류를 쓴다)"""
+        return DETOUR_P_FIXED
 
     def _ev_view(self, c, others):
         """구급차 휴대폰 화면: 출동 여부·목적지까지 남은 거리·지금 알리는 차 수(뒤 5 km 안 같은 방향·목적지 앞)·마이크로 들은 차·비킨 차"""
@@ -1993,7 +2083,7 @@ class Hub:
         return None
 
     def _brief(self, lang, nearby, group, rest_next):
-        """연결 브리핑 한 문장: 주변 Tago 차 수(+그룹 일행 위치) + 다음 휴게소(+충전기 고장·대기 보고)"""
+        """연결 브리핑 한 문장: 주변 길벗 차 수(+그룹 일행 위치) + 다음 휴게소(+충전기 고장·대기 보고)"""
         parts = [L(lang, f"주변 길벗 차량 {nearby}대 연결", f"Linked with {nearby} Gilbeot cars")]
         if group:
             for x in group["members"]:
@@ -2032,7 +2122,7 @@ class Hub:
             elif h["reporters"]:
                 hz.append({"id": h["id"], "type": h["type"], "s": rnd(h["s"]), "cars": len(h["reporters"]), "confirmed": len(h["reporters"]) >= ANON_CONFIRM})
         hz += [{"id": o["id"], "type": "OFFICIAL", "s": rnd(o["s"]), "cars": 0, "confirmed": True} for o in self.official]
-        ems = [{"s": rnd(amb["s"]), "on": amb["on"], "beacon": amb["car"] is not None}] if amb else []   # 시연 구급차(Tago 차가 아니다 — 관제 화면에만)
+        ems = [{"s": rnd(amb["s"]), "on": amb["on"], "beacon": amb["car"] is not None}] if amb else []   # 시연 구급차(길벗 차가 아니다 — 관제 화면에만)
         ems += [{"s": rnd(c["s"]), "on": True, "beacon": True} for c in self.cars   # 구급차 휴대폰(비컨)이 출동 중
                 if c["kind"] == "ev" and not c["demo"] and c["on"] and c["s"] is not None and self.now - c["t"] <= EV_STALE]
         return {"now": r1(self.now), "cars": cars, "hazards": hz,
@@ -2165,5 +2255,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"Tago 도로 링크 서버 :{PORT} · {ROUTE_FILE['name']} {LENGTH / 1000:.1f}km · 휴게소 {len(REST)}곳", flush=True)
+    print(f"길벗 도로 링크 서버 :{PORT} · {ROUTE_FILE['name']} {LENGTH / 1000:.1f}km · 휴게소 {len(REST)}곳", flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

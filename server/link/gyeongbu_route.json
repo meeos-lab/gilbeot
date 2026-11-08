@@ -793,5 +793,117 @@
     }
    ]
   }
+ ],
+ "junctions": [
+  {
+   "id": "ic1",
+   "name": "양재IC",
+   "nameEn": "Yangjae IC",
+   "ref": null,
+   "osm": 734789603,
+   "lat": 37.462778,
+   "lon": 127.040461,
+   "s": 149,
+   "offset": 2
+  },
+  {
+   "id": "ic2",
+   "name": "대왕판교IC",
+   "nameEn": "Daewangpangyo IC",
+   "ref": "48",
+   "osm": 4309664511,
+   "lat": 37.410624,
+   "lon": 127.089584,
+   "s": 7384,
+   "offset": 5
+  },
+  {
+   "id": "ic3",
+   "name": "판교IC",
+   "nameEn": "Pangyo IC",
+   "ref": "47",
+   "osm": 2820817913,
+   "lat": 37.403848,
+   "lon": 127.096516,
+   "s": 8354,
+   "offset": 2
+  },
+  {
+   "id": "ic4",
+   "name": "수원신갈IC",
+   "nameEn": "Suwon-Singal IC",
+   "ref": "44",
+   "osm": 558884021,
+   "lat": 37.266801,
+   "lon": 127.103695,
+   "s": 23625,
+   "offset": 2
+  },
+  {
+   "id": "ic5",
+   "name": "기흥IC",
+   "nameEn": "Giheung IC",
+   "ref": "43A",
+   "osm": 9722433547,
+   "lat": 37.22676,
+   "lon": 127.104165,
+   "s": 28143,
+   "offset": 0
+  },
+  {
+   "id": "ic6",
+   "name": "기흥동탄IC",
+   "nameEn": "Giheung-Dongtan IC",
+   "ref": "43B",
+   "osm": 558856724,
+   "lat": 37.218545,
+   "lon": 127.09818,
+   "s": 29195,
+   "offset": 0
+  },
+  {
+   "id": "ic7",
+   "name": "오산IC",
+   "nameEn": "Osan IC",
+   "ref": "42",
+   "osm": 436218174,
+   "lat": 37.145952,
+   "lon": 127.08342,
+   "s": 37450,
+   "offset": 0
+  },
+  {
+   "id": "ic8",
+   "name": "남사진위IC",
+   "nameEn": "Namsa-Jinwi IC",
+   "ref": "41-1",
+   "osm": 5679953513,
+   "lat": 37.099429,
+   "lon": 127.119434,
+   "s": 43689,
+   "offset": 15
+  },
+  {
+   "id": "ic9",
+   "name": "안성IC",
+   "nameEn": "Anseong IC",
+   "ref": "40",
+   "osm": 436207992,
+   "lat": 36.997606,
+   "lon": 127.152829,
+   "s": 55427,
+   "offset": 3
+  },
+  {
+   "id": "ic10",
+   "name": "북천안IC",
+   "nameEn": "Bukcheonan IC",
+   "ref": "39-1",
+   "osm": 1790358899,
+   "lat": 36.899233,
+   "lon": 127.189058,
+   "s": 67190,
+   "offset": 0
+  }
  ]
 }

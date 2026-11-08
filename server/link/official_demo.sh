@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 공식 확인 실측(두 에뮬레이터): crash_demo 의 충돌 뒤 앞차에 순정 내비 돌발 정보(official_sim)를 넣는다 → 뒷차 "사고 구간(도로 정보 확인)" → 90초 뒤 공식 해제로 사고 의심이 거둬진다
-# 대상 APK: 기본 ai.meeos.tago(두 기능 debug·픽업판). 길벗판은 TAGO_PKG=ai.meeos.gilbeot bash <이 대본> — 액티비티 이름은 판과 무관하게 ai.meeos.tago.MainActivity
+# 대상 APK: 기본 ai.meeos.tago(두 기능 debug 판). 길벗판은 TAGO_PKG=ai.meeos.gilbeot bash <이 대본> — 액티비티 이름은 판과 무관하게 ai.meeos.tago.MainActivity
 A=emulator-5554; B=emulator-5556; PKG=${TAGO_PKG:-ai.meeos.tago}; APP=$PKG/ai.meeos.tago.MainActivity; VC=http://127.0.0.1:8088
 OUT=${TAGO_OFFICIAL_OUT:-/tmp/tago_official}
 mkdir -p $OUT

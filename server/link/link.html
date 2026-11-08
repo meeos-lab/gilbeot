@@ -9,7 +9,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
 <!-- OpenFreeMap 바탕용 MapLibre(약 800KB)는 TMAP 앱키가 없을 때만 leafletApi().load() 가 불러온다(차량 WebView 의 내려받기·파싱·GL 컨텍스트 하나를 아낀다) -->
 <style>
-  /* 휴대폰 참가자 페이지도 차 앱과 같은 Tago 토큰(docs/ui-design.md §2): 흰 바탕·검정 글자, 주 동작은 검정 채움, 직각, 1px 회색 테두리.
+  /* 휴대폰 참가자 페이지도 차 앱과 같은 디자인 토큰(docs/ui-design.md §2): 흰 바탕·검정 글자, 주 동작은 검정 채움, 직각, 1px 회색 테두리.
      색은 뜻이 있는 곳에만(위험 red · 주의 orange · 비·내 차 blue · 완료 green). 다크는 휴대폰 시스템 모드를 따른다(차 화면은 ?dark=1) */
   :root { --bg:#FFFFFF; --card:#FFFFFF; --face:#F2F2F2; --text:#000000; --sub:#6E6E6E; --line:#D4D4D4; --divider:#E6E6E6; --ink:#000000; --onink:#FFFFFF; --accent:#0064FF;
           --warn:#F62E24; --caution:#FF8A00; --info:#0064FF; --ok:#02C265; }
@@ -32,7 +32,7 @@
   .row { display:flex; align-items:center; gap:10px; padding:12px 0; border-bottom:1px solid var(--divider); font-size:16px; line-height:22px; }
   .row:last-child { border-bottom:0; } .row b { flex:1; } .row .d { color:var(--sub); font-size:14px; line-height:20px; text-align:right; }
   .row.me b::after { content:" (나)"; color:var(--sub); font-weight:400; }
-  /* 버튼: 차 앱 TagoButton 의 휴대폰 치수. Primary = ink 채움, Ghost(Secondary) = 면 + 1px 테두리. 눌림은 축소 + 면 색 */
+  /* 버튼: 차 앱 버튼 컴포넌트의 휴대폰 치수. Primary = ink 채움, Ghost(Secondary) = 면 + 1px 테두리. 눌림은 축소 + 면 색 */
   button { font:inherit; font-size:17px; line-height:24px; min-height:56px; padding:14px 16px; border:1px solid var(--line); background:var(--card); color:var(--text);
            width:100%; margin-top:12px; cursor:pointer; transition:transform 80ms, background-color 80ms; }
   button:active { transform:scale(.97); background:var(--face); }
@@ -706,11 +706,19 @@ function panel(v) {
     + (v.rest && !v.rest.mine && !v.rest.none && !v.rest.answered ? `<div class="alert info">${icon('cafe')} ${esc(v.rest.say)}
        <div class="two"><button class="primary" onclick="answer(true)">${T('들를게요', 'Yes, stop')}</button><button class="ghost" onclick="answer(false)">${T('괜찮아요', 'No thanks')}</button></div></div>` : '');
   if (CAR) return;
+  // 동승(ADR-47): seenFrom = 이 보기의 기준 차(내가 탄 차). 그 차와의 거리 대신 '타고 있는 차', 내 줄에는 '○○ 차에 동승'
+  const sf = v.seenFrom;
   const rows = v.members.map(m => `<div class="row ${m.me ? 'me' : ''}">${icon('car')}<b>${esc(m.name)}</b>
-     <span class="d">${m.car ? esc(m.car) + '<br>' : ''}${m.me || m.gap == null ? '' : km(m.gap) + ' ' + (m.gap > 0 ? T('앞', 'ahead') : T('뒤', 'behind'))}${m.soc != null ? ' · ' + T('배터리', 'battery') + ' ' + m.soc + '%' : ''}</span></div>`).join('');
+     <span class="d">${m.me && sf ? T(`${esc(sf.name)} 차에 동승`, `riding in ${esc(sf.name)}'s car`) : (m.car ? esc(m.car) + '<br>' : '') + (sf && m.id === sf.id ? T('타고 있는 차', 'my ride') : m.me || m.gap == null ? '' : km(m.gap) + ' ' + (m.gap > 0 ? T('앞', 'ahead') : T('뒤', 'behind')))}${m.soc != null ? ' · ' + T('배터리', 'battery') + ' ' + m.soc + '%' : ''}</span></div>`).join('');
+  // 위치: 동승이면 필요 없음. 따로 가는데 HTTP 주소(시연)면 휴대폰 브라우저가 위치를 막는다 → 버튼 대신 사실대로 알리고, 탄 차를 고르는 칩을 준다
+  const rideHere = !sf && !((g.steps || []).length) && v.members.length > 1 ? `<p class="hint">${T('일행 차에 타고 있다면 그 차를 고르세요 · 그 차 화면과 같은 안내가 와요', 'Riding in a family car? Pick it to get the same alerts as that car')}<br>${v.members.filter(m => !m.me).map(m =>
+    `<button class="chip" onclick="journeyRide(${esc(JSON.stringify(m.id))})">${icon('car')} ${esc(m.name)}</button>`).join('')}</p>` : '';
+  const locate = sf ? `<p class="hint">${icon('car')} ${T(`${esc(sf.name)} 차 기준으로 안내해요 · 내 위치는 보내지 않아요`, `Alerts follow ${esc(sf.name)}'s car · your location is not sent`)}</p>`
+    : window.isSecureContext ? `<button class="primary" onclick="shareLocation()">${icon('pin')} ${T('내 위치 공유', 'Share my location')}</button>${rideHere}`
+    : `<p class="hint">${icon('pin')} ${T('이 주소에서는 휴대폰 위치를 쓸 수 없어요 · 내 앞 위험 안내는 위치가 있어야 와요', 'This address cannot use phone location · alerts for the road ahead need a location')}</p>${rideHere}`;
   const rest = v.rest && !v.rest.none ? `<p class="hint">${icon('cafe')} ${esc(v.rest.name)} · ${T('들른대요', 'stopping')}: ${esc(v.rest.yes.join(', '))}${v.rest.pending.length ? ' · ' + T('응답 전', 'waiting') + ': ' + esc(v.rest.pending.join(', ')) : ''}</p>` : '';
   document.getElementById('panel').innerHTML = (GID !== 'road' && g.id ? stepsCard(g) : '') + `<div class="card">${rows}${rest}
-    <button class="primary" onclick="shareLocation()">${icon('pin')} ${T('내 위치 공유', 'Share my location')}</button>
+    ${locate}
     <button class="ghost" onclick="restStop()">${icon('cafe')} ${T('다같이 휴게소 들르자', 'Everyone stop at the next rest area')}</button>
     <p class="hint">${v.restNext ? T(`다음 ${esc(v.restNext.name)}까지 ${km(v.restNext.dist)}`, `Next stop ${esc(v.restNext.name)} in ${km(v.restNext.dist)}`) : ''}</p>
     <p class="hint">${T('위치는 그룹 안에서만 공유돼요 · 운전 중에는 만지지 마세요', 'Location stays in this group · don’t use while driving')}</p></div>
@@ -720,15 +728,18 @@ function panel(v) {
 function joinForm() {
   document.getElementById('sub').textContent = T('가족이 함께 가기에 초대했어요', 'Your family invited you to a group drive');
   document.getElementById('panel').innerHTML = `<div class="card">
-    <input id="nm" placeholder="${T('이름 (예: 이모)', 'Your name')}"><input id="car" placeholder="${T('차 (예: 쏘렌토 · 검정)', 'Your car')}">
+    <input id="nm" placeholder="${T('이름 (예: 이모)', 'Your name')}">
     <input id="code" placeholder="${T('코드 4자리', '4-digit code')}" value="${esc(qs.get('code') || '')}" inputmode="numeric">
-    <button class="primary" onclick="join()">${T('합류하기', 'Join')}</button>
+    <button class="primary" onclick="join(true)">${T('합류 · 이 차에 같이 타요', 'Join · I am riding in this car')}</button>
+    <p class="hint">${T('같이 타면 위치 없이 그 차 화면과 같은 안내를 받아요', 'Riding along: same alerts as that car, no location needed')}</p>
+    <input id="car" placeholder="${T('따로 갈 때 내 차 (예: 쏘렌토 · 검정)', 'Driving separately: your car')}">
+    <button class="ghost" onclick="join(false)">${T('합류 · 내 차로 따로 가요', 'Join · I am driving separately')}</button>
     <p class="hint">${T('Pleos 차가 아니어도 휴대폰으로 함께 가요 · 위치는 그룹 안에서만', 'Join from your phone · location stays in this group')}</p></div>`;
 }
 
-async function join() {
+async function join(ride) {
   const r = await api('POST', '/api/link/join', {code: document.getElementById('code').value.trim(), name: document.getElementById('nm').value.trim(),
-    car: document.getElementById('car').value.trim(), kind: 'web'}).catch(e => ({error: e.message}));
+    car: ride ? '' : document.getElementById('car').value.trim(), kind: 'web', ride: !!ride}).catch(e => ({error: e.message}));
   // 서버: 404 코드가 틀림·만료, 429 여러 번 틀려 잠시 잠김(60초), 503 도로가 꽉 참
   if (!r || r.error) { alert(r && r.error === '429' ? T('여러 번 틀렸어요. 1분 뒤에 다시 넣어 주세요', 'Too many tries. Try again in a minute')
     : r && r.error === '503' ? T('지금은 합류할 수 없어요. 잠시 뒤에 다시 해 주세요', 'Can’t join right now. Try again shortly')

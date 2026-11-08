@@ -47,7 +47,7 @@
 
 ### 1.1 설계 원칙
 
-1. **차가 이미 가진 신호만 쓴다.** 새 센서를 붙이지 않는다. 이름·위경도·사이렌 원음은 링크로 보내지 않고, 위치는 경로 위 거리 s 로만 주고받는다.
+1. **차가 이미 가진 신호만 쓴다.** 새 센서를 붙이지 않는다. 이름·위경도·사이렌 원음은 링크로 보내지 않고, 위치는 경로 위 거리 s 로만 주고받는다. 위치 권한은 휴게소 주차와 본선 정차를 구분하는 데만 쓰며, 위치는 차 안에서 계산하고 경로 이탈 여부(불리언 하나)만 보낸다.
 2. **사고는 '의심'으로만 말한다.** 판정 근거를 둘까지 함께 읽어 주고, 공식 정보가 겹칠 때만 한 단계 올린다.
 3. **한 번에 한 문장.** 안내는 "전방 거리 · 무엇 · 누가 확인 · 행동" 순서의 내비 안내체다. 발화 예산을 넘는 정보는 화면에만 둔다.
 4. **두 구현, 한 규칙.** 같은 규칙과 상수를 PC 엔진과 앱 내장 엔진에 두고, 대조 스크립트로 출력이 같은지 검사한다.
@@ -98,7 +98,7 @@
 | ③ 안내 | 뒤차 | 뷰(응답)에 실린 위험을 발화 예산 등급에 따라 한 문장으로 말함 |
 | ④ 공식 확인 | 허브 | 순정 내비 돌발 정보가 ±2 km 안에 있으면 "사고 구간(도로 정보 확인)"으로 올리고, 공식 종료 시각에 거둠 |
 
-**통신 규격.** HTTP/1.1 + JSON 폴링이다. 모든 응답에 API 버전 `gilbeot-road/1` 이 실리고, 도로 링크 요청은 [`server/link/schema/`](server/link/schema/)의 JSON Schema(Draft 2020-12)로 두 허브가 같은 판정을 낸다. 오류는 RFC 9457 형식(`type`·`title`·`status`·`detail`)이다. 위험 항목은 ETSI DENM 의 필드 의미(`causeCode`, `informationQuality`, `detectionTime`, `validityDuration`, `eventPosition`, `relevanceDistance`)를 따른다. Pleos 서드파티 앱은 차량 간 직접 무선통신(V2X 무선)을 쓸 수 없어 DENM 인코딩 자체가 아니라 그 의미를 HTTP 위에 옮겼다.
+**통신 규격.** HTTP + JSON 폴링이다(앱 내장 허브는 HTTP/1.1, PC 허브는 HTTP/1.0 으로 응답한다. 요청마다 연결을 닫는 폴링이라 동작 차이는 없다). 모든 응답에 API 버전 `gilbeot-road/1` 이 실리고, 도로 링크 요청은 [`server/link/schema/`](server/link/schema/)의 JSON Schema(Draft 2020-12)로 두 허브가 같은 판정을 낸다. 오류는 RFC 9457 형식(`type`·`title`·`status`·`detail`)이다. 위험 항목은 ETSI DENM 의 필드 의미(`causeCode`, `informationQuality`, `detectionTime`, `validityDuration`, `eventPosition`, `relevanceDistance`)를 따른다. Pleos 서드파티 앱은 차량 간 직접 무선통신(V2X 무선)을 쓸 수 없어 DENM 인코딩 자체가 아니라 그 의미를 HTTP 위에 옮겼다.
 
 ## 3. 핵심 규칙
 
@@ -207,7 +207,7 @@
 
 **필요한 것**
 - Pleos Connect 에뮬레이터(Android Automotive 14 / API 34, x86_64)와 Virtual Console
-- 소스 빌드: JDK 17, Android SDK 35, 저장소의 Gradle Wrapper(이 저장소의 기본 빌드는 길벗 판이다: `gradle.properties` 의 `meeos.edition=gilbeot`)
+- 소스 빌드: JDK 17, Android SDK 37(compileSdk 37 · targetSdk 35), 저장소의 Gradle Wrapper(이 저장소의 기본 빌드는 길벗 판이다: `gradle.properties` 의 `meeos.edition=gilbeot`)
 - PC 허브: Python 3.10 이상(표준 라이브러리만 사용)
 - 지도 타일·CDN 을 받기 위한 인터넷 연결
 
@@ -217,7 +217,30 @@
 adb install -r -g apk/Meeos_Gilbeot_release.apk
 ```
 
-`-g` 는 마이크(사이렌 감지) 등 런타임 권한을 함께 준다. 차 화면에서 [함께 가기 · 앞차와 위험 공유]를 누르면 시연 도로(설 연휴 귀성길: 사고 → 정체 → 낙하물 → 내리막 → 비 → 터널 연기 → 침수)가 시작된다.
+`-g` 는 차 속도·마이크(사이렌 감지)·위치(휴게소 판정 — 차 안에서만 계산) 런타임 권한을 함께 준다. 차 화면에서 [함께 가기 · 앞차와 위험 공유]를 누르면 시연 도로(설 연휴 귀성길: 사고 → 정체 → 낙하물 → 내리막 → 비 → 터널 연기 → 침수)가 시작된다. 시연 도로는 **차가 움직여야** 진행된다. 아래 Virtual Console 에서 기어를 D 로 두고 ACCEL 을 누르고 있으면(시속 80 km 안팎) 주변 차와 위험 안내가 차례로 나온다. 정차 중에는 '함께 가기 연결됨 · 주변 차량 0대'에 머문다. 큰 속도에서 갑자기 0 으로 세우면 충돌로 감지해 '괜찮으세요?'를 묻는다([괜찮아요]로 닫는다). 새 에뮬레이터의 첫 실행에서는 대기 화면 지도가 뜨기까지 30초쯤 걸릴 수 있다.
+
+**같은 에뮬레이터에 다른 Meeos 앱이 떠 있을 때.** 앱 안 서버는 포트 8790 을 쓴다. 같은 포트를 쓰는 다른 앱이 먼저 떠 있으면 이 앱의 서버가 뜨지 않고(`adb logcat -s Meeos` 에 '내장 서버 시작 실패: … EADDRINUSE'), 휴대폰 화면이 데이터를 받지 못한다. 그 앱을 먼저 끄고(`adb shell am force-stop <그 앱 패키지>`) 이 앱을 다시 연다.
+
+**새 에뮬레이터에서 첫 실행이 권한 대화상자에서 멈출 때.** Android Automotive 는 앱을 운전자 사용자(보통 10번)에서 돌려 `-g` 가 그 사용자에게 닿지 않을 수 있다(새로 만든 에뮬레이터 첫 설치에서 실제로 멈춘 기록이 있다). 사용자 번호를 확인하고, 다르면 아래의 `10` 을 그 값으로 바꾼다. 권한을 준 뒤 앱을 다시 연다. 런타임 권한은 이 둘뿐이다(Pleos 차량 권한은 설치만으로 주어진다).
+
+```bash
+adb shell am get-current-user
+```
+```bash
+adb shell pm grant --user 10 ai.meeos.gilbeot android.car.permission.CAR_SPEED
+```
+```bash
+adb shell pm grant --user 10 ai.meeos.gilbeot android.permission.RECORD_AUDIO
+```
+```bash
+adb shell pm grant --user 10 ai.meeos.gilbeot android.permission.ACCESS_FINE_LOCATION
+```
+
+**Virtual Console 열기.** 페달·기어·문·방향지시는 에뮬레이터의 Virtual Console 웹 화면으로 조작한다. 포트를 연 뒤 PC 브라우저에서 `http://127.0.0.1:8088/` 을 연다. 창이 작거나(1600×900 미만) 다른 창에 가려지면 페달 조작이 먹지 않을 수 있다.
+
+```bash
+adb forward tcp:8088 tcp:8088
+```
 
 **휴대폰 화면 보기.** 앱 내장 허브를 PC 로 연다.
 
@@ -225,7 +248,7 @@ adb install -r -g apk/Meeos_Gilbeot_release.apk
 adb forward tcp:8791 tcp:8790
 ```
 
-[가족 차 묶기]를 누르면 참가 링크(`/link/<그룹>?code=`)가 `adb logcat -s Meeos` 에 뜬다. PC 브라우저(휴대폰 크기)에서 `http://127.0.0.1:8791` 뒤에 붙여 연다. 3D 관제는 `/world?me=<차 id>` 다.
+[가족 차 묶기]를 누르면 참가 링크(`/link/<그룹>?code=`)가 `adb logcat -s Meeos` 에 뜬다(이 기록은 심사용 빌드 — 시연 훅 포함 — 에서만 찍힌다). PC 브라우저(휴대폰 크기)에서 `http://127.0.0.1:8791` 뒤에 붙여 연다. 합류 화면에서 [합류 · 이 차에 같이 타요]를 고르면 휴대폰 위치 없이 그 차 화면과 같은 위험 안내가 휴대폰에도 뜬다. [내 차로 따로 가요]는 휴대폰 위치가 필요한데, 시연 주소(HTTP)에서는 휴대폰 브라우저가 위치를 막는다. 3D 관제는 `/world?me=<차 id>` 다.
 
 **PC 허브와 두 엔진 대조.**
 
@@ -236,12 +259,27 @@ python server/link/link_server.py
 python server/link/check_link_parity.py http://127.0.0.1:8788 http://127.0.0.1:8791 ko
 ```
 
-**두 차 라이브 시연**(앞차·뒤차 에뮬레이터 2대): [`server/link/crash_demo.sh`](server/link/crash_demo.sh)(충돌 → 뒤차 안내), [`server/link/official_demo.sh`](server/link/official_demo.sh)(공식 확인), [`server/link/twocar_demo.sh`](server/link/twocar_demo.sh). 절차와 시연용 인텐트 훅은 개발 보고서의 운영 절차 부록에 있다.
-
-**빌드.**
+**두 차 라이브 시연**(앞차·뒤차 에뮬레이터 2대): [`server/link/crash_demo.sh`](server/link/crash_demo.sh)(충돌 → 뒤차 안내), [`server/link/official_demo.sh`](server/link/official_demo.sh)(공식 확인), [`server/link/twocar_demo.sh`](server/link/twocar_demo.sh). **제출 APK 하나로는 안 된다.** 제출 APK 는 허브를 앱 안에 두는 앞차·단독용이고, 뒷차는 앞차 에뮬레이터의 허브를 보는 APK 를 소스에서 따로 빌드해 두 번째 에뮬레이터에 설치해야 한다(주소는 빌드 때 정해지며 앱 안 설정이 없다). 열쇠 파일이 없으면 디버그 키로 서명된다.
 
 ```bash
-./gradlew assembleRelease
+./gradlew assembleRelease -Pmeeos.edition=gilbeot -Pmeeos.demo=true -Pmeeos.serverUrl=http://10.0.2.2:8791
+```
+```bash
+adb -s emulator-5556 install -r -g app/build/outputs/apk/release/app-release.apk
+```
+```bash
+adb -s emulator-5554 forward tcp:8791 tcp:8790
+```
+
+마지막 줄은 앞차(`emulator-5554`)의 내장 허브를 PC 의 8791 로 열어 뒷차가 `10.0.2.2:8791` 로 닿게 한다(에뮬레이터 이름은 `adb devices` 로 확인). 절차와 시연용 인텐트 훅은 개발 보고서의 운영 절차 부록에 있다.
+
+**빌드.** 제출 APK 는 심사용 빌드(시연 훅 포함)다. 제품 빌드는 옵션 없이 빌드하며, 이때는 시연 인텐트·참가 링크 기록이 꺼진다.
+
+```bash
+./gradlew assembleRelease -Pmeeos.edition=gilbeot -Pmeeos.demo=true
+```
+```bash
+./gradlew assembleRelease -Pmeeos.edition=gilbeot
 ```
 
 ## 7. 저장소 구성

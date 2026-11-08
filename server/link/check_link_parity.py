@@ -5,7 +5,9 @@
 대본 셋: run(기존 — 시연 구급차는 마이크만 ems "mic"), run_ev(긴급차량 비컨·예상 경로·길 터 주기 물결, 시연 ems "all"·"yield" 와 직접 보고),
 run_schema(요청 스키마 거절 400 {error:"schema", field, rule}·거절 뒤 상태 불변·받아야 하는 경계). 모든 응답의 api 버전과 위험의 DENM 필드도 비교된다
 run_skew(시계 오차 가드: 30 s 넘게 틀린 t 는 창에 쓰지 않고 clockSkew 로 알림), run_limit(권고 속도를 차가 보낸 제한속도로 상한),
-run_units(어바인 units "mi" → 영어 거리 글 ft·mi).
+run_units(어바인 units "mi" → 영어 거리 글 ft·mi), run_ride(동승 — 위치 없는 휴대폰 참가자는 탄 차 기준, ADR-47),
+run_detour(최소 우회 안내 FR-G-36 — 막힘 확정 10 km 안·다음 나들목 1 km 이상·처리 종료 + 300 s 해제),
+run_rest(휴게소 제외는 경로에서 옆으로 30 m 벗어난 정지만 · 해제 뒤 재보고는 해제 표시를 지움, 11-08).
 네 번째 인자 ignore=키,키 는 비교에서 그 키를 뺀다(바꾸기 전 PC ↔ 새 앱 대조에서 더한 필드만 빼고 볼 때).
 """
 import json
@@ -13,6 +15,7 @@ import sys
 import urllib.error
 import urllib.request
 
+ROUTE_PT = tuple(json.loads(open(__import__("pathlib").Path(__file__).with_name("gyeongbu_route.json"), encoding="utf-8").read())["route"][20])   # 경로 꼭짓점(위경도) — offRoute 대본
 EV_TOKEN = "meeos-ev-demo"   # 두 엔진의 시연 기본 토큰(link_server.EV_TOKEN, LinkHub.EV_TOKEN)
 IGNORE = set()               # 비교에서 뺄 응답 키(ignore=… 인자)
 
@@ -27,8 +30,9 @@ def call(base, method, path, body=None):
 
 
 def norm(o):
+    # 무작위 값: 그룹·코드·id·차 이름표·시각, 우회 배정 assign(무작위 차 id 의 해시 추첨 — run_detour 가 dnorm 으로 규칙을 따로 검사)
     if isinstance(o, dict):
-        return {k: norm(v) for k, v in o.items() if (k not in ("group", "code", "id", "me", "car", "now", "t") or isinstance(v, (dict, list))) and k not in IGNORE}
+        return {k: norm(v) for k, v in o.items() if (k not in ("group", "code", "id", "me", "car", "now", "t", "assign") or isinstance(v, (dict, list))) and k not in IGNORE}
     if isinstance(o, list):
         return [norm(x) for x in o]
     if isinstance(o, float) and o == int(o):
@@ -479,6 +483,198 @@ def run_units(base, lang):
     return out
 
 
+def run_ride(base, lang):
+    """동승(ADR-47): 위치 없는 휴대폰 참가자가 '같이 타요'로 합류하면 보기(위험 문장·앞길·휴게소)는 탄 차 기준, 말은 참가자 언어.
+    따로 가는 참가자(위치 없음)는 문장 없음. 칩으로 자기 자신을 고르면 기준이 풀리고, 탄 차 소식이 끊기면 내 위치(없음)로 돌아간다"""
+    out = []
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})
+    T0 = 9000.0
+    other = "en" if lang == "ko" else "ko"
+    host = call(base, "POST", "/api/road/join", {"name": "아빠", "car": "그랜저", "t": T0, "lang": lang})["me"]
+    call(base, "POST", "/api/road/state", {"me": host, "t": T0, "s": 18000.0, "speed": 25.0})
+    g = call(base, "POST", "/api/link/group", {"me": host, "t": T0 + 1})
+    gid, code = g["group"], g["code"]
+    rider = call(base, "POST", "/api/link/join", {"code": code, "name": "고모", "kind": "web", "ride": True, "t": T0 + 2, "lang": other})
+    out.append(("join rider", rider["view"]))
+    rid = rider["me"]
+    sep = call(base, "POST", "/api/link/join", {"code": code, "name": "이모", "car": "쏘렌토", "kind": "web", "ride": False, "t": T0 + 3, "lang": lang})
+    out.append(("join separate", sep["view"]))
+    sid = sep["me"]
+    bad = call(base, "POST", "/api/link/join", {"code": code, "name": "삼촌", "kind": "web", "ride": "yes", "t": T0 + 3.5, "lang": lang})   # 참·거짓이 아닌 값 = 따로
+    out.append(("join ride str", bad["view"]))
+    # 모르는 차 둘이 2 km 앞에서 피함 → 낙하물 확정(2대)
+    a = call(base, "POST", "/api/road/join", {"name": "a", "car": "a", "t": T0 + 4, "lang": lang})["me"]
+    b = call(base, "POST", "/api/road/join", {"name": "b", "car": "b", "t": T0 + 4, "lang": lang})["me"]
+    for k, c in enumerate((a, b)):
+        call(base, "POST", "/api/road/state", {"me": c, "t": T0 + 5, "s": 20000.0 + 40 * k, "speed": 25.0})
+        out.append((f"swerve {k}", call(base, "POST", "/api/road/event", {"me": c, "t": T0 + 6 + k, "type": "SWERVE", "value": "steer"})))
+    s = 18000.0
+    for k in range(1, 13):
+        t = T0 + 8 + k
+        s += 25.0
+        call(base, "POST", "/api/road/state", {"me": a, "t": t, "s": 20000.0 + 25 * k, "speed": 25.0})
+        call(base, "POST", "/api/road/state", {"me": b, "t": t, "s": 20040.0 + 25 * k, "speed": 25.0})
+        out.append((f"host t{k}", call(base, "POST", "/api/road/state", {"me": host, "t": t, "s": s, "speed": 25.0, "wiper": "CONTINUOUS_2", "temp": -1})))
+        if k % 3 == 0:
+            out.append((f"rider t{k}", call(base, "GET", f"/api/road?me={rid}&t={t}")))
+            out.append((f"rider group t{k}", call(base, "GET", f"/api/link/{gid}?me={rid}&t={t}")))
+            out.append((f"separate t{k}", call(base, "GET", f"/api/road?me={sid}&t={t}")))
+        if k == 4:                                       # 탄 차 혼자 급제동 보고 → 그 차처럼 동승자에게도 말하지 않는다
+            out.append(("host brake", call(base, "POST", "/api/road/event", {"me": host, "t": t, "type": "HARD_BRAKE", "value": "test"})))
+            out.append(("rider after host brake", call(base, "GET", f"/api/road?me={rid}&t={t}")))
+        if k == 7:                                       # 칩: 자기 자신을 고름 → 기준 풀림, 다시 탄 차를 고름
+            out.append(("rider picks self", call(base, "POST", f"/api/link/{gid}/journey/ride", {"me": rid, "t": t, "ride": rid})))
+            out.append(("rider picks host", call(base, "POST", f"/api/link/{gid}/journey/ride", {"me": rid, "t": t, "ride": host})))
+            out.append(("separate picks host", call(base, "POST", f"/api/link/{gid}/journey/ride", {"me": sid, "t": t, "ride": host})))   # 따로 가던 참가자도 칩으로 동승이 된다
+    t = T0 + 21
+    out.append(("rider world", call(base, "GET", f"/api/road/world?me={rid}&t={t}")))
+    out.append(("rider sends own s", call(base, "POST", "/api/road/state", {"me": rid, "t": t + 1, "s": 30000.0, "speed": 20.0})))   # 내 위치가 생기면 내 기준
+    out.append(("separate host quiet", call(base, "GET", f"/api/road?me={sid}&t={t + 120}")))   # 탄 차 소식 끊김(ACTIVE 밖) → 내 위치 없음으로
+    return out
+
+
+def fnv1a32(text):
+    """허브의 우회 배정 추첨과 같은 FNV-1a 32비트(link_server.fnv1a32 · LinkHub.fnv1a32)"""
+    h = 0x811C9DC5
+    for b in text.encode("utf-8"):
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def dnorm(d, me):
+    """보기 detour 의 assign 은 무작위 차 id 에 달려 두 허브 값이 다를 수 있다 — '해시 규칙대로 배정했나'(assignOk)로 바꿔 비교한다"""
+    if not d:
+        return d
+    d = dict(d)
+    want = "detour" if fnv1a32(f"{me}:{d['hazard']}") / 4294967296.0 < d["p"] else "stay"
+    d["assignOk"] = d.pop("assign") == want
+    return d
+
+
+def run_detour(base, lang):
+    """최소 우회 안내(FR-G-36, 11-08 통합 기준 = 시뮬레이션 detour_rules.py): ① 시연 도로 — 정체 확정 뒤 권고, 다음 나들목이 1 km 안이면 거둠
+    ② 정체 직접 보고(2대 확정, s 26 km): 9 km 앞·다음 나들목 6.6 km → 권고 / 10.5 km 앞 → 없음 / 다음 나들목 0.9 km → 없음 /
+       나들목을 지나 막힘 2 km 앞·다음 나들목이 막힘 뒤 → 없음(나가려면 막힘을 지나야 한다 — 시뮬 eligible 과 같다)
+    ③ 충돌(IMPACT) 두 대 = 사고 의심 확정 → 사유 INCIDENT ④ 공식 돌발 종료(처리 종료) → 그 순간 사고 의심 해제라 그 막힘의 권고를 거둠
+       (처리 종료 + 300 s 보다 먼저). 서 있는 두 차가 올린 정체는 별개 막힘이라 권고가 그 정체로 이어진다"""
+    out = []
+    nm = "아빠" if lang == "ko" else "Dad"
+    T0 = 11000.0
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})   # 논리 시각 대본
+    me = call(base, "POST", "/api/road/join", {"name": nm, "car": "그랜저", "t": T0, "lang": lang})["me"]
+    call(base, "POST", "/api/road/state", {"me": me, "t": T0, "s": 18000.0, "speed": 25.0})
+    call(base, "POST", "/api/road/demo", {"me": me, "t": T0, "ems": "mic"})
+    s, v = 18000.0, 25.0
+    for k in range(1, 121):
+        target = 25.0 if k < 18 else 20.0 if k < 30 else 8.0 if k < 60 else 4.0
+        v = max(v - 1.5, min(v + 1.5, target))
+        s += v * 4
+        res = call(base, "POST", "/api/road/state", {"me": me, "t": T0 + k, "s": s, "speed": v, "wiper": "OFF"})
+        if k % 10 == 0 or k in (20, 21, 108, 109):
+            out.append((f"demo t{k}", {"detour": dnorm(res.get("detour"), me), "s": res.get("s"), "offRoute": res.get("offRoute")}))
+    # ② 정체 직접 보고
+    T1 = 12000.0
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})
+    me = call(base, "POST", "/api/road/join", {"name": nm, "car": "그랜저", "t": T1, "lang": lang})["me"]
+    others = [call(base, "POST", "/api/road/join", {"name": f"x{i}", "car": "", "t": T1, "lang": lang})["me"] for i in range(2)]
+    for i, o in enumerate(others):
+        call(base, "POST", "/api/road/state", {"me": o, "t": T1 + 1, "s": 26000.0 + 30 * i, "speed": 3.0})
+        call(base, "POST", "/api/road/event", {"me": o, "t": T1 + 1, "type": "CONGESTION", "value": "11km/h", "s": 26000.0 + 30 * i, "speed": 3.0})
+    for k, ms in ((2, 17000.0), (3, 15500.0), (4, 22700.0), (5, 24000.0)):
+        res = call(base, "POST", "/api/road/state", {"me": me, "t": T1 + k, "s": ms, "speed": 25.0})
+        out.append((f"jam s{ms:.0f}", {"detour": dnorm(res.get("detour"), me), "hazards": [(h["id"], h["type"], h["ahead"], h["confirmed"]) for h in res.get("hazards", [])]}))
+    # ⑤ 응답·이탈: detourAck 를 실으면 보기 ack 로 돌아오고(모르는 값은 버림), 위경도가 경로에서 1 km 넘게 떨어지면 offRoute true
+    lat0, lon0 = ROUTE_PT
+    for k, extra in ((6, {"detourAck": {"hazard": "h1", "ack": "maybe"}}), (7, {"detourAck": {"hazard": "h1", "ack": "accepted"}}),
+                     (8, {"lat": lat0, "lon": lon0}), (9, {"lat": lat0, "lon": lon0 + 0.03}), (10, {"detourAck": {"hazard": "h1", "ack": "declined"}})):
+        res = call(base, "POST", "/api/road/state", {"me": me, "t": T1 + k, "s": 17000.0, "speed": 25.0, **extra})
+        out.append((f"ack/off t{k}", {"detour": dnorm(res.get("detour"), me), "offRoute": res.get("offRoute")}))
+    # ③ 충돌 두 대 ④ 공식 종료 + 300 s
+    T2 = 13000.0
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})
+    me = call(base, "POST", "/api/road/join", {"name": nm, "car": "그랜저", "t": T2, "lang": lang})["me"]
+    cs = []
+    for i in range(2):                           # 한 대만으로는 확정이 아니다(ANON_CONFIRM 2) — 두 대째에서 확정
+        c = call(base, "POST", "/api/road/join", {"name": f"y{i}", "car": "", "t": T2, "lang": lang})["me"]
+        cs.append(c)
+        call(base, "POST", "/api/road/state", {"me": c, "t": T2 + 1, "s": 26500.0 + 20 * i, "speed": 25.0})
+        call(base, "POST", "/api/road/event", {"me": c, "t": T2 + 2, "type": "IMPACT", "value": "25.0→0.0 m/s", "s": 26500.0 + 20 * i, "speed": 0.0})
+        call(base, "POST", "/api/road/state", {"me": c, "t": T2 + 3, "s": 26500.0 + 20 * i, "speed": 0.0})
+    for k, ms in ((4, 20000.0), (5, 23000.0)):
+        res = call(base, "POST", "/api/road/state", {"me": me, "t": T2 + k, "s": ms, "speed": 25.0})
+        out.append((f"impact s{ms:.0f}", {"detour": dnorm(res.get("detour"), me), "hazards": [(h["id"], h["type"], h["ahead"], h["confirmed"]) for h in res.get("hazards", [])]}))
+    call(base, "POST", "/api/road/official", {"me": cs[0], "t": T2 + 6, "events": [
+        {"type": "ACCIDENT", "s": 26520.0, "start": T2, "end": T2 + 20, "desc": "사고 처리"}]})
+    for k in (8, 19, 21, 30, 321):               # 종료 T2+20: 그 전에는 사고 의심(h1) 기준, 뒤에는 서 있는 차들의 정체 기준
+        for i, c in enumerate(cs):
+            call(base, "POST", "/api/road/state", {"me": c, "t": T2 + k, "s": 26500.0 + 20 * i, "speed": 0.0})
+        res = call(base, "POST", "/api/road/state", {"me": me, "t": T2 + k, "s": 20000.0, "speed": 0.0})
+        out.append((f"procEnd t{k}", {"detour": dnorm(res.get("detour"), me), "hazards": [(h["id"], h["type"], h["ahead"], h["confirmed"]) for h in res.get("hazards", [])]}))
+    return out
+
+
+def run_rest(base, lang):
+    """휴게소 제외(11-08 수정)·해제 뒤 재보고: ① 기흥휴게소(s 27119) 100 m 앞 본선 위(위경도 = 경로 위 점) 충돌 두 대가 멈춰도 사고 의심 유지
+    ② 같은 자리지만 위경도가 경로에서 옆으로 약 70 m(휴게소 주차장) — 사고 의심을 지운다 ③ 위경도 없이 offRoute false(본선) → 유지, 아무것도 없음 → 이전처럼 지움
+    ④ 정체 두 대 → 둘 다 다시 달려 해제 → 120 s 안 재보고 → 해제 표시가 지워져 해제 + TTL 뒤에도 남는다"""
+    import link_server as ls                     # 경로 위 점(위경도)만 빌린다 — 허브 상태와는 무관
+    out = []
+    nm = "아빠" if lang == "ko" else "Dad"
+    rest_s = 27119.0
+
+    def crash(T, latlon=None, hint=None):
+        call(base, "POST", "/api/road/reset", {"clockGuard": False})
+        me = call(base, "POST", "/api/road/join", {"name": nm, "car": "그랜저", "t": T, "lang": lang})["me"]
+        call(base, "POST", "/api/road/state", {"me": me, "t": T, "s": rest_s - 6000, "speed": 25.0})
+        cs = []
+        for i in range(2):
+            c = call(base, "POST", "/api/road/join", {"name": f"r{i}", "car": "", "t": T, "lang": lang})["me"]
+            cs.append(c)
+            sx = rest_s + 100 + 20 * i
+            body = {"me": c, "t": T + 1, "s": sx, "speed": 25.0}
+            call(base, "POST", "/api/road/state", body)
+            call(base, "POST", "/api/road/event", {"me": c, "t": T + 2, "type": "IMPACT", "value": "25.0→0.0 m/s", "s": sx, "speed": 0.0})
+        for k in (3, 20, 45):
+            for i, c in enumerate(cs):
+                sx = rest_s + 100 + 20 * i
+                body = {"me": c, "t": T + k, "s": sx, "speed": 0.0}
+                if latlon:
+                    lat, lon = latlon(sx)
+                    body.update({"lat": lat, "lon": lon})
+                if hint is not None:
+                    body["offRoute"] = hint
+                call(base, "POST", "/api/road/state", body)
+        v = call(base, "POST", "/api/road/state", {"me": me, "t": T + 46, "s": rest_s - 6000, "speed": 25.0})
+        return [(h["id"], h["type"], h["ahead"], h["confirmed"]) for h in v.get("hazards", [])]
+
+    on = lambda sx: tuple(ls.point_at(sx))
+    side = lambda sx: (ls.point_at(sx)[0], ls.point_at(sx)[1] + 0.0008)   # 경로(남북)에서 동쪽으로 약 70 m
+    out.append(("rest mainline crash", crash(14000.0, on)))
+    out.append(("rest parking crash", crash(14500.0, side)))
+    out.append(("rest no latlon offRoute false", crash(15000.0, None, False)))
+    out.append(("rest no latlon offRoute true", crash(15250.0, None, True)))
+    out.append(("rest no latlon (old rule)", crash(15500.0)))
+    # ④ 해제 뒤 재보고
+    T = 16000.0
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})
+    me = call(base, "POST", "/api/road/join", {"name": nm, "car": "그랜저", "t": T, "lang": lang})["me"]
+    cs = [call(base, "POST", "/api/road/join", {"name": f"q{i}", "car": "", "t": T, "lang": lang})["me"] for i in range(2)]
+    for i, c in enumerate(cs):
+        call(base, "POST", "/api/road/state", {"me": c, "t": T + 1, "s": 22000.0 + 30 * i, "speed": 3.0})
+        call(base, "POST", "/api/road/event", {"me": c, "t": T + 1, "type": "CONGESTION", "value": "11km/h", "s": 22000.0 + 30 * i, "speed": 3.0})
+    for i, c in enumerate(cs):                   # 둘 다 다시 달린다 → 해제(cleared)
+        call(base, "POST", "/api/road/state", {"me": c, "t": T + 10, "s": 22100.0 + 30 * i, "speed": 25.0})
+    for i, c in enumerate(cs):                   # 60 s 뒤 다시 막힘 — 같은 위험에 합쳐진다
+        call(base, "POST", "/api/road/state", {"me": c, "t": T + 70, "s": 22100.0 + 30 * i, "speed": 3.0})
+        call(base, "POST", "/api/road/event", {"me": c, "t": T + 70, "type": "CONGESTION", "value": "11km/h", "s": 22100.0 + 30 * i, "speed": 3.0})
+    for k in (71, 140, 200):                     # 해제(T+10) + TTL 120 = T+130 을 지나도 남아야 한다
+        for i, c in enumerate(cs):
+            call(base, "POST", "/api/road/state", {"me": c, "t": T + k, "s": 22100.0 + 30 * i, "speed": 3.0})
+        v = call(base, "POST", "/api/road/state", {"me": me, "t": T + k, "s": 17000.0, "speed": 25.0})
+        out.append((f"re-report t{k}", [(h["id"], h["type"], h["ahead"], h["confirmed"]) for h in v.get("hazards", [])]))
+    return out
+
+
 def compare(ra, rb, tag):
     bad = 0
     for (na, va), (_, vb) in zip(ra, rb):
@@ -502,6 +698,9 @@ def main(a, b, lang="ko", ignore=""):
     compare(run_skew(a, lang), run_skew(b, lang), f"skew {lang}")
     compare(run_limit(a, lang), run_limit(b, lang), f"limit {lang}")
     compare(run_units(a, lang), run_units(b, lang), f"units {lang}")
+    compare(run_ride(a, lang), run_ride(b, lang), f"ride {lang}")
+    compare(run_detour(a, lang), run_detour(b, lang), f"detour {lang}")
+    compare(run_rest(a, lang), run_rest(b, lang), f"rest {lang}")
 
 
 if __name__ == "__main__":

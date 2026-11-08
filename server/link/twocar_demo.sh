@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 두 차 라이브 시연 자동 재현: 앞차 = emulator-5554(내장 허브, VC 8088 로 실제 속도), 뒷차 = emulator-5556(허브 = 10.0.2.2:8791, 시연 주행)
 # usage: bash twocar_demo.sh [brake]   — brake 를 주면 앞차가 급제동(VC 속도 90→20 km/h)까지 한다
-# 대상 APK: 기본 ai.meeos.tago(두 기능 debug·픽업판). 길벗판은 TAGO_PKG=ai.meeos.gilbeot bash <이 대본> — 액티비티 이름은 판과 무관하게 ai.meeos.tago.MainActivity
+# 대상 APK: 기본 ai.meeos.tago(두 기능 debug 판). 길벗판은 TAGO_PKG=ai.meeos.gilbeot bash <이 대본> — 액티비티 이름은 판과 무관하게 ai.meeos.tago.MainActivity
 A=emulator-5554; B=emulator-5556; PKG=${TAGO_PKG:-ai.meeos.tago}; APP=$PKG/ai.meeos.tago.MainActivity; VC=http://127.0.0.1:8088
 OUT=${TAGO_TWOCAR_OUT:-/tmp/tago_twocar}
 mkdir -p $OUT

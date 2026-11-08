@@ -27,7 +27,7 @@ def main(out_path):
     last = None
     for url in ("https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.kumi.systems/api/interpreter"):
         try:
-            req = urllib.request.Request(url, data=body, headers={"User-Agent": "Meeos-Tago-contest/1.0"})
+            req = urllib.request.Request(url, data=body, headers={"User-Agent": "Meeos-contest/1.0"})
             data = urllib.request.urlopen(req, timeout=240).read()
             Path(out_path).write_bytes(data)
             print(f"{url} -> {out_path} {len(data)} bytes")
