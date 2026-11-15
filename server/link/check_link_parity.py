@@ -8,6 +8,9 @@ run_skew(시계 오차 가드: 30 s 넘게 틀린 t 는 창에 쓰지 않고 clo
 run_units(어바인 units "mi" → 영어 거리 글 ft·mi), run_ride(동승 — 위치 없는 휴대폰 참가자는 탄 차 기준, ADR-47),
 run_detour(최소 우회 안내 FR-G-36 — 막힘 확정 10 km 안·다음 나들목 1 km 이상·처리 종료 + 300 s 해제),
 run_rest(휴게소 제외는 경로에서 옆으로 30 m 벗어난 정지만 · 해제 뒤 재보고는 해제 표시를 지움, 11-08).
+run_park(주차 기둥 사진 우편함 — 올리기 검증·차만 가져감·한 번뿐·5분 만료, 11-13 / 주차 글 park — 그룹 화면·정리·지움, 11-13 채점 1바퀴), run_far(긴급차량 예상 경로 넓힌 안내 — 비컨 목적지·물결 지속, 11-13),
+run_near(일행을 주행 도중에 만들기 — 시연 가족 차를 부른 차 자리 기준에 두기·경로 끝에서 주차 글, 11-14).
+run_dir(방향 구분 — 고속도로 맞은편 위험·고리 빼기·방위 hdg 로 맞은편·애매 가르기·방향이 다른 보고는 합치지 않음·되돌아감은 방향 무관, 11-14).
 네 번째 인자 ignore=키,키 는 비교에서 그 키를 뺀다(바꾸기 전 PC ↔ 새 앱 대조에서 더한 필드만 빼고 볼 때).
 """
 import json
@@ -15,8 +18,9 @@ import sys
 import urllib.error
 import urllib.request
 
-ROUTE_PT = tuple(json.loads(open(__import__("pathlib").Path(__file__).with_name("gyeongbu_route.json"), encoding="utf-8").read())["route"][20])   # 경로 꼭짓점(위경도) — offRoute 대본
-EV_TOKEN = "meeos-ev-demo"   # 두 엔진의 시연 기본 토큰(link_server.EV_TOKEN, LinkHub.EV_TOKEN)
+ROUTE_PT = tuple(json.loads(open(__import__("os").environ.get("LINK_ROUTE_FILE") or __import__("pathlib").Path(__file__).with_name("gyeongbu_route.json"), encoding="utf-8").read())["route"][20])   # 경로 꼭짓점(위경도) — offRoute 대본
+import ev_token as _ev_token   # noqa: E402
+EV_TOKEN = _ev_token.load()[0]   # 두 엔진이 같은 값을 써야 한다: 환경변수 TAGO_EV_TOKEN → ev_token.local(앱은 빌드 때 같은 곳에서 읽는다)
 IGNORE = set()               # 비교에서 뺄 응답 키(ignore=… 인자)
 
 
@@ -352,6 +356,221 @@ def run_ev(base, lang):
     out.append(("w3 M", call(base, "GET", f"/api/road?me={y['M']}&t={t + 17}")))
     out.append(("w end", call(base, "GET", f"/api/road?me={y['M']}&t={t + 80}")))       # 60초 창·30초 TTL 지남
     return out
+
+
+def run_vtype(base, lang):
+    """비컨 차종(2026-11-13): ambulance(기본·생략·모르는 값)·fire·police. 진로 양보 판단·우선순위는 차종과 무관하고 문구(label·say)와 보기의 vtype 만 다르다.
+    차종마다 새 도로에서 같은 시나리오(구급차 600 m 뒤에서 다가옴 → 500 m 안)를 돌려 두 엔진의 보기를 대조한다."""
+    out = []
+    T0 = 8000.0
+    for vt in (None, "ambulance", "fire", "police", "bogus"):
+        call(base, "POST", "/api/road/reset", {"clockGuard": False})
+        me = call(base, "POST", "/api/road/join", {"name": "A", "car": "A", "t": T0, "lang": lang})["me"]
+        body = {"kind": "ev", "token": EV_TOKEN, "name": "긴급", "t": T0, "lang": lang}
+        if vt is not None:
+            body["vtype"] = vt
+        ev = call(base, "POST", "/api/road/join", body)["me"]
+        t = T0
+        es, ms = 19000.0, 20000.0
+        for k in range(1, 6):
+            t = T0 + k
+            es += 30.0
+            ms += 20.0
+            call(base, "POST", "/api/road/state", {"me": me, "t": t, "s": ms, "speed": 20})
+            out.append((f"vtype {vt} on{k}", call(base, "POST", "/api/road/state", {"me": ev, "t": t, "s": es, "speed": 30, "on": True, "dest_s": 24000})))
+        out.append((f"vtype {vt} view", call(base, "GET", f"/api/road?me={me}&t={t}")))
+        es += 650.0
+        call(base, "POST", "/api/road/state", {"me": ev, "t": t + 1, "s": es, "speed": 30, "on": True, "dest_s": 24000})
+        out.append((f"vtype {vt} near", call(base, "GET", f"/api/road?me={me}&t={t + 1}")))
+    return out
+
+
+def run_far(base, lang):
+    """긴급차량 예상 경로 넓힌 안내(새 기능 I, 2026-11-13): 비컨 목적지가 있으면 뒤 5~15 km 차에 목적지 방향 약한 안내(말하지 않음),
+    목적지를 지난 차·목적지 없는 비컨은 없음. 비킴 물결이 20 s 넘게 이어지면 앞쪽 응급실 나들목까지(경로 파일에 erExits 가 있을 때만) — 두 엔진 같은 보기"""
+    out = []
+    T0 = 150000.0
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})
+    cars = {}
+    for name, s0 in (("A", 27000.0), ("B", 31000.0), ("C", 21500.0), ("Y1", 30000.0), ("Y2", 30300.0), ("Y3", 30600.0), ("Y4", 30900.0),
+                     ("Y5", 31200.0), ("Y6", 31500.0), ("F", 36000.0)):
+        cars[name] = call(base, "POST", "/api/road/join", {"name": name, "car": name, "t": T0, "lang": lang})["me"]
+        call(base, "POST", "/api/road/state", {"me": cars[name], "t": T0, "s": s0 - 20, "speed": 20})
+        call(base, "POST", "/api/road/state", {"me": cars[name], "t": T0 + 1, "s": s0, "speed": 20})
+    ev = call(base, "POST", "/api/road/join", {"kind": "ev", "token": EV_TOKEN, "name": "긴급", "t": T0, "lang": lang})["me"]
+    es = 20000.0
+    for k in range(1, 7):
+        es += 30
+        t = T0 + 1 + k
+        call(base, "POST", "/api/road/state", {"me": ev, "t": t, "s": es, "speed": 30, "on": True, "dest_s": 30000})
+        for n in ("A", "B", "C"):
+            out.append((f"dest {n} {k}", call(base, "GET", f"/api/road?me={cars[n]}&t={t}")))
+    call(base, "POST", "/api/road/state", {"me": ev, "t": T0 + 8, "s": es, "speed": 0, "on": False})
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})
+    for name in ("Y1", "Y2", "Y3", "Y4", "Y5", "Y6", "F"):
+        s0 = {"Y1": 30000.0, "Y2": 30300.0, "Y3": 30600.0, "Y4": 30900.0, "Y5": 31200.0, "Y6": 31500.0, "F": 36000.0}[name]
+        cars[name] = call(base, "POST", "/api/road/join", {"name": name, "car": name, "t": T0 + 20, "lang": lang})["me"]
+        call(base, "POST", "/api/road/state", {"me": cars[name], "t": T0 + 20, "s": s0 - 20, "speed": 20})
+        call(base, "POST", "/api/road/state", {"me": cars[name], "t": T0 + 21, "s": s0, "speed": 20})
+    for k in range(6):
+        t = T0 + 21 + 3 * k
+        call(base, "POST", "/api/road/event", {"me": cars[f"Y{k + 1}"], "t": t, "s": 30000 + 300 * k, "speed": 12, "type": "YIELD", "value": "right"})
+        out.append((f"wave F {k}", call(base, "GET", f"/api/road?me={cars['F']}&t={t}")))
+    for dt in (30, 40, 120):
+        out.append((f"wave F +{dt}", call(base, "GET", f"/api/road?me={cars['F']}&t={T0 + 21 + dt}")))
+    return out
+
+
+def route_bearing(s0):
+    """경로 파일의 그 자리 진행 방위(도, 정북 0·시계 방향) — 두 허브의 bearing_at·bearingAt 과 같은 투영·같은 구간 고르기"""
+    import math
+    f = json.loads(open(__import__("os").environ.get("LINK_ROUTE_FILE") or __import__("pathlib").Path(__file__).with_name("gyeongbu_route.json"), encoding="utf-8").read())
+    lat0 = sum(p[0] for p in f["route"]) / len(f["route"])
+    kx, ky = 111320.0 * math.cos(math.radians(lat0)), 110540.0
+    pts = [(lon * kx, lat * ky) for lat, lon in (p[:2] for p in f["route"])]
+    cum = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        cum.append(cum[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
+    s = max(0.0, min(cum[-1], s0))
+    i = 0
+    while i < len(cum) - 2 and cum[i + 1] < s:
+        i += 1
+    a, b = pts[i], pts[i + 1]
+    return (math.degrees(math.atan2(b[0] - a[0], b[1] - a[1])) + 360.0) % 360.0
+
+
+def run_near(base, lang):
+    """일행을 주행 도중에 만들 때(near, 11-14): 시연 가족 차를 시연 시계가 아니라 부른 차의 지금 자리 기준(앞 3 km·뒤 1.5 km)에 두고,
+    그 차들이 경로 끝에 서면 주차 글(시연 값)을 낸다 — 그룹 보기(일행 줄의 park)로 대조한다. near 없이 부르면 예전 자리 규칙 그대로"""
+    out = []
+    T0 = 170000.0
+    for near in (True, False):
+        call(base, "POST", "/api/road/reset", {"clockGuard": False})
+        length = call(base, "GET", "/api/road/route")["length"]
+        s0 = length - 6000.0
+        me = call(base, "POST", "/api/road/join", {"name": "N", "car": "N", "t": T0, "lang": lang})["me"]
+        call(base, "POST", "/api/road/state", {"me": me, "s": s0, "speed": 20.0, "t": T0})
+        call(base, "POST", "/api/road/demo", {"me": me, "t": T0, "core": True, "ems": "beacon"})
+        gid = call(base, "POST", "/api/link/group", {"me": me, "t": T0 + 30})["group"]
+        body = {"me": me, "t": T0 + 31, "core": True, "ems": "beacon"}
+        if near:
+            body["near"] = True
+        out.append((f"family near={near}", call(base, "POST", f"/api/link/{gid}/demo", body)))
+        for k in range(1, 7):                              # 내 차는 서 있고 20초씩 — 가족 차가 끝에 닿아 서고 주차 글을 낸다
+            t = T0 + 31 + 20 * k
+            call(base, "POST", "/api/road/state", {"me": me, "s": s0, "speed": 0.0, "t": t})
+            out.append((f"near={near} t+{20 * k}", call(base, "GET", f"/api/link/{gid}?me={me}&t={t}")))
+    return out
+
+
+def run_dir(base, lang):
+    """방향 구분(11-14): 차의 방향 = 경로 위 s 의 증감(또는 방위 hdg). 고속도로 구간의 맞은편 위험·고리는 보기·지도에서 빼고,
+    방향이 애매하면 낮은 단계(side "unsure", note, 말 없음). 같은 방향·맞은편·방위(맞은편·애매)·방향이 다른 두 보고(합치지 않음)·되돌아감(방향 무관)
+    장면을 걸음마다 보는 차의 보기(/api/road)와 지도(/api/road/world?me=)로 대조한다"""
+    out = []
+    T0 = 160000.0
+    st = lambda me, s, t, speed=25.0, **kw: call(base, "POST", "/api/road/state", {"me": me, "s": s, "speed": speed, "t": t, **kw})
+    join = lambda name, t: call(base, "POST", "/api/road/join", {"name": name, "car": name, "t": t, "lang": lang})["me"]
+
+    def car(name, a, b, t0):
+        me = join(name, t0)
+        st(me, a, t0)
+        st(me, b, t0 + 1)
+        return me
+
+    def brake(me, s, t):
+        return call(base, "POST", "/api/road/event", {"me": me, "type": "HARD_BRAKE", "value": "25.0->8.0", "s": s, "speed": 8.0, "t": t})
+
+    def look(tag, me, t):
+        out.append((f"{tag} view", call(base, "GET", f"/api/road?me={me}&t={t}")))
+        out.append((f"{tag} world", call(base, "GET", f"/api/road/world?me={me}&t={t}")))
+
+    for opposite in (False, True):                       # (a) 같은 방향 (b) 맞은편 — 3 km 앞 두 대의 급제동
+        tag = "opp" if opposite else "same"
+        call(base, "POST", "/api/road/reset", {"clockGuard": False})
+        me = car("나", 9970.0, 10000.0, T0)
+        look(f"{tag} me", me, T0 + 1)
+        a0, a1 = (13030.0, 13000.0) if opposite else (12970.0, 13000.0)
+        x = car("X", a0, a1, T0)
+        look(f"{tag} x", me, T0 + 1)
+        y = car("Y", a0 + 40, a1 + 40, T0)
+        look(f"{tag} y", me, T0 + 1)
+        brake(x, 13000.0, T0 + 2)
+        look(f"{tag} brake x", me, T0 + 2)
+        brake(y, 13040.0, T0 + 2)
+        look(f"{tag} brake y", me, T0 + 2)
+        st(me, 10030.0, T0 + 2)
+        look(f"{tag} move", me, T0 + 2)
+        look(f"{tag} from x", x, T0 + 2)
+    # (c) 방위: 한 번도 안 움직인 차가 맞은편(+180°)·애매(+90°) 방위를 보냄
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})
+    me = car("나", 9970.0, 10000.0, T0)
+    bearing = route_bearing(13000.0)
+    for n, s, off in (("X", 13000.0, 180.0), ("Y", 13040.0, 180.0), ("P", 15000.0, 90.0), ("Q", 15040.0, 90.0)):
+        c = join(n, T0)
+        st(c, s, T0 + 1, speed=0.0, hdg=(bearing + off) % 360.0)
+        look(f"hdg {n} state", me, T0 + 1)
+        brake(c, s, T0 + 2)
+        look(f"hdg {n} brake", me, T0 + 2)
+    # (d) 방향이 다른 두 보고(200 m, 합치는 거리 안)는 합치지 않는다
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})
+    me = car("나", 9970.0, 10000.0, T0)
+    same = car("S", 12970.0, 13000.0, T0)
+    opp = car("O", 13230.0, 13200.0, T0)
+    brake(same, 13000.0, T0 + 2)
+    look("merge same", me, T0 + 2)
+    brake(opp, 13200.0, T0 + 2)
+    look("merge me", me, T0 + 2)
+    look("merge opp", opp, T0 + 2)
+    # (e) 되돌아감은 양쪽 모두의 일 — 방향으로 거르지 않는다
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})
+    me = car("나", 9970.0, 10000.0, T0)
+    x = car("X", 13030.0, 13000.0, T0)
+    y = car("Y", 13070.0, 13040.0, T0)
+    for n, c in (("x", x), ("y", y)):
+        call(base, "POST", "/api/road/event", {"me": c, "type": "TURNBACK", "value": "u", "s": 13000.0, "speed": 3.0, "t": T0 + 2})
+        look(f"turnback {n}", me, T0 + 2)
+    return out
+
+
+def run_park(base, lang):
+    """주차 기둥 사진 우편함(새 기능 H, 2026-11-13): 가족 휴대폰이 올리고(parkphoto) Pleos 차가 한 번 가져간다(parkphoto/take).
+    올리기 검증(base64·길이·형식)·가져가기 권한(차만)·한 번뿐·5분 만료·그룹 밖 거부를 두 엔진이 같은 상태 코드·본문으로 답하는지 본다."""
+    out = []
+    T0 = 120000.0
+    call(base, "POST", "/api/road/reset", {"clockGuard": False})
+    car = call(base, "POST", "/api/road/join", {"name": "P", "car": "P", "t": T0, "lang": lang})["me"]
+    g = call(base, "POST", "/api/link/group", {"me": car, "t": T0, "name": "P"})
+    gid, code = g["group"], g["code"]
+    ph = call(base, "POST", "/api/link/join", {"code": code, "name": "폰", "kind": "web", "t": T0, "lang": lang})["me"]
+    stranger = call(base, "POST", "/api/road/join", {"name": "X", "car": "X", "t": T0, "lang": lang})["me"]
+    put = lambda body: call(base, "POST", f"/api/link/{gid}/parkphoto", body)
+    take = lambda me, t=T0: call(base, "POST", f"/api/link/{gid}/parkphoto/take", {"me": me, "t": t})
+    out.append(("empty box", take(car)))
+    out.append(("phone cannot take", take(ph)))
+    out.append(("stranger put", put({"me": stranger, "img": "AAAA"})))
+    for name, body in (("no img", {"me": ph}), ("img num", {"me": ph, "img": 5}), ("img empty", {"me": ph, "img": ""}), ("img not b64", {"me": ph, "img": "@@@@"}),
+                       ("img too long", {"me": ph, "img": "A" * 60001}), ("img data uri", {"me": ph, "img": "data:image/jpeg;base64,AAAA"})):
+        out.append((name, put(body)))
+    out.append(("still empty", take(car)))
+    out.append(("put ok", put({"me": ph, "img": "QUJD"})))
+    out.append(("put max", put({"me": ph, "img": "A" * 60000})))            # 한 그룹에 한 장 — 나중 것이 앞 것을 덮는다
+    r = take(car)
+    out.append(("take max len", {"len": len((r.get("photo") or {}).get("img", "")), "photo": bool(r.get("photo"))}))
+    out.append(("take twice", take(car)))
+    put({"me": ph, "img": "QUJD"})
+    out.append(("expired", take(car, T0 + 400)))                                # 5분(300 s) 지난 사진은 없는 것
+    put({"me": ph, "img": "QUJD"})
+    out.append(("stranger take", take(stranger)))
+    out.append(("unknown group", call(base, "POST", "/api/link/nosuch/parkphoto/take", {"me": car, "t": T0})))
+    # 주차 글(11-13 채점 1바퀴): 차가 1 s 상태에 실은 "B2 · D-14" 가 휴대폰 그룹 화면에 보이고, 정리 규칙·null 지움이 같은지
+    def park_of(viewer):
+        v = call(base, "GET", f"/api/link/{gid}?me={viewer}")
+        return [m.get("park") for m in v["group"]["members"] if m["name"] == "P"]
+    for name, val in (("park text", "B2 · D-14"), ("park sanitized", "  B2~B3 <b>x</b> 37.5,127.1 " + "가" * 60), ("park num", 5), ("park blank", "   "), ("park null", None)):
+        call(base, "POST", "/api/road/state", {"me": car, "t": T0 + 1, "s": 1000, "park": val})
+        out.append((name, park_of(ph)))
+    return [(n, json.loads(json.dumps(v).replace(gid, "GID"))) for n, v in out]     # 오류 본문의 instance 경로에 무작위 그룹 id 가 들어 있다
 
 
 def run_schema(base, lang):
@@ -694,6 +913,11 @@ def main(a, b, lang="ko", ignore=""):
     IGNORE.update(k for k in ignore.removeprefix("ignore=").split(",") if k)
     compare(run(a, lang), run(b, lang), f"road {lang}")
     compare(run_ev(a, lang), run_ev(b, lang), f"ev {lang}")
+    compare(run_vtype(a, lang), run_vtype(b, lang), f"vtype {lang}")
+    compare(run_park(a, lang), run_park(b, lang), f"park {lang}")
+    compare(run_far(a, lang), run_far(b, lang), f"far {lang}")
+    compare(run_dir(a, lang), run_dir(b, lang), f"dir {lang}")
+    compare(run_near(a, lang), run_near(b, lang), f"near {lang}")
     compare(run_schema(a, lang), run_schema(b, lang), f"schema {lang}")
     compare(run_skew(a, lang), run_skew(b, lang), f"skew {lang}")
     compare(run_limit(a, lang), run_limit(b, lang), f"limit {lang}")

@@ -51,6 +51,13 @@
   .leaflet-bar { border:1px solid var(--line); box-shadow:none; }
   body.tmap #map { position:relative; } body.tmap .tmlbl { white-space:nowrap; }
   .leaflet-control-attribution { font-size:11px; }
+  .er { width:100%; height:100%; box-sizing:border-box; display:flex; align-items:center; justify-content:center; background:#F62E24; border:2px solid #FFFFFF; }
+  .er svg { width:62%; height:62%; color:#FFFFFF; }
+  .er.dim { background:#FFFFFF; border:2px solid #F62E24; } .er.dim svg { color:#F62E24; }
+  /* 알림이 퍼지는 물결(11-15 사용자 "물결 느낌이없는데"): 알리는 구간 위를 구급차에서 앞으로 흘러가는 빨간 고리 — 장식 움직임(허브가 알리는 구간 안에서만) */
+  .wave { width:100%; height:100%; box-sizing:border-box; border-radius:50%; border:4px solid #F62E24; background:rgba(246,46,36,.30); box-shadow:0 0 0 3px rgba(255,255,255,.55); animation:wv .9s ease-out infinite; }
+  @keyframes wv { 0% { transform:scale(.35); opacity:1 } 100% { transform:scale(1.2); opacity:.25 } }
+  @media (prefers-reduced-motion: reduce) { .wave { animation:none } }
 </style>
 </head>
 <body>
@@ -196,14 +203,14 @@ function leafletApi() {
 // 쓰는 확장은 OES_vertex_array_object(WebGL2 기본 기능으로 잇는다)·WEBGL_lose_context 둘뿐이다. 실차처럼 WebGL1 이 되면 아무것도 바꾸지 않는다
 function webgl1OnWebgl2() {
   const proto = HTMLCanvasElement.prototype;
-  if (proto.__tagoGl1) return; proto.__tagoGl1 = true;
+  if (proto.__mapGl1) return; proto.__mapGl1 = true;
   const orig = proto.getContext;
   proto.getContext = function (type, attrs) {
     const ctx = orig.call(this, type, attrs);
     if (ctx || (type !== 'webgl' && type !== 'experimental-webgl')) return ctx;
     const gl = orig.call(this, 'webgl2', attrs);
-    if (!gl || gl.__tagoGl1) return gl;
-    gl.__tagoGl1 = true;
+    if (!gl || gl.__mapGl1) return gl;
+    gl.__mapGl1 = true;
     const ext = gl.getExtension.bind(gl);
     gl.getExtension = name => name !== 'OES_vertex_array_object' ? ext(name) : {
       VERTEX_ARRAY_BINDING_OES: gl.VERTEX_ARRAY_BINDING,
@@ -426,29 +433,117 @@ function posAt(s) {
     return [r[i - 1][0] + t * (r[i][0] - r[i - 1][0]), r[i - 1][1] + t * (r[i][1] - r[i - 1][1])]; }
   return null;
 }
+// 응급실(11-15 구급차 시점): 허브 경로 정보의 erExits(공식 응급의료기관 목록에서 권역·지역응급의료센터만, 나들목마다 가까운 순)를 기관 하나씩 펼친다.
+// 이름이 긴 법인·대학 앞머리는 지도 글에서 뗀다(예: '학교법인가톨릭학원가톨릭대학교서울성모병원' → '서울성모병원'). 나머지가 네 글자보다 짧으면 그대로
+let ERS = [], erFocus = null, focusUntil = 0;
+const erShort = n => { const m = /^(.*(?:대학교|대학|법인|학원))(.+)$/.exec(n || ''); return m && m[2].length >= 4 ? m[2] : n; };
+function loadErs() {
+  ERS = [];
+  for (const e of (ROUTE && ROUTE.erExits) || []) for (const h of e.hospitals || [])
+    ERS.push({name: h.name, short: erShort(h.name), kind: h.kind, ll: [h.lat, h.lon], km: h.km, exitS: e.s, exitName: LANG === 'en' ? e.nameEn : e.name});
+}
+// 가장 가까운 응급실: 내 앞 나들목(경로 위 s 가 내 자리보다 앞)으로 나가 가는 거리(경로 거리 + 나들목에서 곧은 거리)가 가장 짧은 곳
+function nearestEr(myS) {
+  if (myS == null) return null;
+  let best = null, bd = Infinity;
+  for (const h of ERS) { if (h.exitS <= myS) continue; const d = (h.exitS - myS) + h.km * 1000; if (d < bd) { bd = d; best = {...h, dist: d}; } }
+  return best;
+}
+// 고른 응급실로 지도 맞춤: 먼저 그 응급실에 다가가(2.6초) 보여 준 뒤, 구급차 · 나가는 나들목 · 응급실이 한눈에 들어오게 넓힌다. 그동안은 1초마다 하는 자동 맞춤을 쉰다
+function focusEr(h) {
+  if (!h || !mapOn) return;
+  erFocus = h; focusUntil = Date.now() + 6000; erRoad(h);
+  MapApi.fit([h.ll], {maxZoom: 14});
+  setTimeout(() => {
+    const pts = [h.ll, posAt(h.exitS)].concat(myLL ? [myLL] : []).concat(ER_ROADS[h.name] ? ER_ROADS[h.name].pts : []).filter(Boolean);
+    MapApi.fit(pts, {pad: .3, maxZoom: 14}); lastFit = Date.now();
+  }, 2600);
+}
+let myLL = null;
+// 나들목 → 응급실 실제 길(11-15 사용자 "api써서 노선도 표기해"): 티맵 자동차 경로 API(앱 TmapRoute 와 같은 주소·좌표계)로 한 번 받아 둔다(응급실마다 한 번 — 하루 무료 한도 안).
+// 지도 키가 없거나(PC 개발 서버) 못 받으면 예전처럼 곧은 점선으로 둔다(점선 = 실제 길이 아님)
+const ER_ROADS = {};
+async function erRoad(h) {
+  if (!USE_TMAP || !h || h.name in ER_ROADS) return;
+  ER_ROADS[h.name] = null;
+  // 출발 = 나들목 400 m 앞 경로 위, 진행 방향(경로 방위)을 함께 보낸다 — 방향 없이 고속도로 위에서 부르면 반대 방향으로 돌아 34 km 경로가 나왔다(11-15 에뮬레이터)
+  const ex = posAt(Math.max(0, h.exitS - 400)), ex2 = posAt(Math.max(0, h.exitS - 350)); if (!ex || !ex2) return;
+  const y = Math.sin((ex2[1] - ex[1]) * Math.PI / 180) * Math.cos(ex2[0] * Math.PI / 180);
+  const x = Math.cos(ex[0] * Math.PI / 180) * Math.sin(ex2[0] * Math.PI / 180) - Math.sin(ex[0] * Math.PI / 180) * Math.cos(ex2[0] * Math.PI / 180) * Math.cos((ex2[1] - ex[1]) * Math.PI / 180);
+  const angle = Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360);
+  try {
+    const r = await fetch('https://apis.openapi.sk.com/tmap/routes?version=1', {method: 'POST',
+      headers: {appKey: TMAP_KEY, 'Content-Type': 'application/json', accept: 'application/json'},
+      body: JSON.stringify({startX: ex[1], startY: ex[0], endX: h.ll[1], endY: h.ll[0], reqCoordType: 'WGS84GEO', resCoordType: 'WGS84GEO', searchOption: 0, angle, directionOption: 1})});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json(), pts = [];
+    for (const f of j.features || []) if (f.geometry && f.geometry.type === 'LineString') for (const c of f.geometry.coordinates) pts.push([c[1], c[0]]);
+    const p0 = j.features && j.features[0] && j.features[0].properties;
+    if (pts.length > 1) ER_ROADS[h.name] = {pts, m: p0 ? p0.totalDistance : null, s: p0 ? p0.totalTime : null};
+  } catch (e) { console.warn('응급실 가는 길을 받지 못해 곧은 점선으로 둔다', e); }
+  if (lastView) draw(lastView);
+}
 async function drawRoute() {
   await mapReady;
   ROUTE = await api('GET', '/api/road/route');
+  loadErs();
   MapApi.line({latlngs: ROUTE.route, color: '#0064FF', weight: 5, opacity: 1, casing: {color: '#0046B4', weight: 9, opacity: 1}});
   MapApi.fit(ROUTE.route, {top: 20, right: 20, bottom: 20, left: 20});
 }
+// 물결: 알리는 구간(구급차 자리 → 끝)을 고리 셋이 초속 1.2 km 로 앞으로 흘러간다(구간 끝에서 다시 구급차 자리부터). 100 ms 마다 자리만 옮긴다
+const WAVES = 2, WAVE_MPS = 1500;   // 고리 수, 흐르는 빠르기(m/s)
+let waveBand = null, wavePucks = [], waveT0 = Date.now();
+setInterval(() => {
+  if (!waveBand || !mapOn) { wavePucks.forEach(w => w.remove()); wavePucks = []; return; }
+  const [a, b] = waveBand, len = b - a; if (len < 200) return;
+  while (wavePucks.length < WAVES) wavePucks.push(MapApi.puck({latlng: posAt(a), html: '<div class="wave"></div>', size: 48, interactive: false, z: 980}));
+  const t = (Date.now() - waveT0) / 1000 * WAVE_MPS;   // 지금까지 흐른 거리(m)
+  wavePucks.forEach((w, k) => { const x = a + ((t + k * len / WAVES) % len); const q = posAt(x); if (q) w.setLatLng(q); });
+}, 100);
+const EV_RANGE_M = 5000, EV_DEST_MARGIN_M = 300;   // 허브 EV_RANGE · EV_DEST_MARGIN 과 같은 값(알리는 구간 그림만 쓴다 — 실제 대상은 허브가 정해 toldS 로 준다)
 function draw(v) {
   if (!mapOn || !ROUTE) return;
   layer.clear();
   const pts = [];
   const me = posAt(v.s);
+  myLL = me;
+  const ev = v.ev || {};
+  // 알리는 구간: 출동 중이면 내 앞 5 km(목적지가 있으면 그 앞까지)를 빨간 반투명 띠로 — 허브가 이 안의 같은 방향 차에 알린다
+  if (on && ev.live && v.s != null) {
+    const end = Math.min(v.s + EV_RANGE_M, dest != null ? dest + EV_DEST_MARGIN_M : Infinity), band = [];
+    for (let x = v.s; x <= end; x += 100) { const q = posAt(x); if (q) band.push(q); }
+    if (band.length > 1) layer.add(MapApi.line({latlngs: band, color: '#F62E24', weight: 14, opacity: .28}));
+    waveBand = [v.s, end];
+  } else waveBand = null;
+  // 알린 차: 허브가 준 경로 위 자리(이름·id 없음)에 빨간 점(흰 테)
+  for (const ts of (on && ev.live && ev.toldS) || []) { const q = posAt(ts); if (q) layer.add(MapApi.dot({latlng: q, radius: 6, color: '#FFFFFF', weight: 2, fillColor: '#F62E24', fillOpacity: 1})); }
+  // 응급실 표지: 모두 작게(흰 바탕 빨간 십자), 고른 곳은 크게(빨간 바탕) + 이름표 + 나들목에서 점선
+  for (const h of ERS) {
+    const big = erFocus && erFocus.name === h.name;
+    layer.add(MapApi.puck({latlng: h.ll, html: `<div class="er ${big ? '' : 'dim'}">${icon('medical', '')}</div>`, size: big ? 34 : 22, interactive: false, z: big ? 950 : 800}));
+    if (big) {
+      const road = ER_ROADS[h.name];   // 받은 실제 길이면 이름표에 나들목에서 거리·시간
+      const extra = road && road.s != null ? T(` · 나들목에서 약 ${Math.max(1, Math.round(road.s / 60))}분`, ` · ~${Math.max(1, Math.round(road.s / 60))} min from exit`) : '';   // 이름표는 짧게(시간만) — 거리까지 넣으면 휴대폰 지도 폭을 넘었다
+      layer.add(MapApi.label({latlng: h.ll, html: esc(`${h.short} ${T('응급실', 'ER')}${extra}`), dy: -20, cls: 'tag', opacity: .95}));   // 위: 오른쪽은 지도 끝에서 잘리고, 왼쪽·아래는 가까운 나들목 깃발 이름표와 겹쳤다
+      const ex = posAt(h.exitS);
+      if (road) layer.add(MapApi.line({latlngs: road.pts, color: '#F62E24', weight: 5, opacity: 1, casing: {color: '#FFFFFF', weight: 8, opacity: 1}}));
+      else if (ex) layer.add(MapApi.line({latlngs: [ex, h.ll], color: '#F62E24', weight: 3, opacity: .9, dash: '6 6'}));
+    }
+  }
   if (me) {   // 내 위치 = 사이렌 표지(지도 link.html 과 같은 그림)
     layer.add(MapApi.puck({latlng: me, html: `<img class="hzs" src="${SIREN_PNG}" alt="">`, size: 40, interactive: false, z: 1000}));
-    layer.add(MapApi.label({latlng: me, html: esc(T('구급차(나)', 'Ambulance (me)')), dx: 22, cls: 'tag', opacity: .9}));
+    layer.add(MapApi.label({latlng: me, html: esc(T(`${vname(VTYPE)}(나)`, `${vname(VTYPE)} (me)`)), dx: 22, cls: 'tag', opacity: .9}));
     pts.push(me);
   }
   const d = dest != null ? posAt(dest) : null;
   if (d) {
     layer.add(MapApi.puck({latlng: d, html: `<div class="pin">${icon('flag', '')}</div>`, size: 28, interactive: false, z: 900}));
-    layer.add(MapApi.label({latlng: d, html: esc(destLabel || T('목적지', 'Destination')), dx: 16, cls: 'tag', opacity: .9}));
+    const exitLbl = erFocus && dest === erFocus.exitS ? `${erFocus.exitName}${T('로 나감', ' exit')}` : null;
+    layer.add(MapApi.label({latlng: d, html: esc(exitLbl || destLabel || T('목적지', 'Destination')), ...(exitLbl ? {dy: 18} : {dx: 16}), cls: 'tag', opacity: .9}));   // 응급실 나들목은 아래(위는 응급실 이름표)
     pts.push(d);
   }
-  if (pts.length && Date.now() - lastFit > 10000) { lastFit = Date.now(); MapApi.fit(pts, {pad: .4, maxZoom: 14}); }
+  if (erFocus && on) pts.push(erFocus.ll);
+  if (pts.length && Date.now() > focusUntil && Date.now() - lastFit > 10000) { lastFit = Date.now(); MapApi.fit(pts, {pad: .4, maxZoom: 14}); }
 }
 
 // ---------------------------------------------------------------- 출동 상태
@@ -456,9 +551,15 @@ let ME = '';
 let on = false, dest = null, destLabel = '', dest0 = null, gps = null, lastView = null, authFail = false, err = '';
 const now = () => Date.now() / 1000;
 
+// 차종(긴급자동차): 진로 양보 판단은 차종과 무관하고 차 안 문구만 다르다. ?vtype=ambulance|fire|police 로 정하거나 화면에서 고른다(출동 전에만)
+const VTYPES = ['ambulance', 'fire', 'police'];
+let VTYPE = VTYPES.includes(qs.get('vtype')) ? qs.get('vtype') : 'ambulance';
+const vname = v => ({ambulance: T('구급차', 'Ambulance'), fire: T('소방차', 'Fire truck'), police: T('경찰차', 'Police car')})[v];
+async function setVtype(v) { if (on || v === VTYPE || !VTYPES.includes(v)) return; VTYPE = v; await join(); render(); }
+
 async function join() {
   try {
-    const r = await api('POST', '/api/road/join', {kind: 'ev', token: TOKEN, name: T('구급차', 'Ambulance'), lang: LANG, t: now()});
+    const r = await api('POST', '/api/road/join', {kind: 'ev', token: TOKEN, vtype: VTYPE, name: vname(VTYPE), lang: LANG, t: now()});
     ME = r.me; lastView = r.view;
   } catch (e) { if (e.status === 403) authFail = true; else err = T('허브에 연결할 수 없어요', 'Cannot reach the hub'); }
 }
@@ -488,13 +589,17 @@ function setOn(x) {
 function pick(i) {
   const c = choices()[i];
   dest = c ? c.s : null; destLabel = c ? c.name : ''; dest0 = null;
+  erFocus = c && c.er ? c.er : null;
+  if (erFocus) focusEr(erFocus);
   send();
 }
 // 목적지 고르기: 허브가 아는 사고 의심·공식 사고(내 앞), 또는 없음
 function choices() {
   const hz = (lastView && lastView.hazards) || [];
-  return hz.filter(h => (h.type === 'INCIDENT' || (h.type === 'OFFICIAL' && h.official && h.official.type === 'ACCIDENT')) && h.ahead != null && h.ahead > 0)
-    .map(h => ({s: h.s, name: h.type === 'INCIDENT' ? T('사고 지점', 'Crash site') : esc(h.label), ahead: h.ahead}));
+  const er = nearestEr(SIM ? SIM.s : (lastView ? lastView.s : null));
+  const erChoice = er ? [{s: er.exitS, er, name: esc(`${er.short} ${T('응급실', 'ER')}`), ahead: er.dist, sub: esc(`${er.exitName}${T('로 나감', ' exit')} · ${er.kind}`)}] : [];
+  return erChoice.concat(hz.filter(h => (h.type === 'INCIDENT' || (h.type === 'OFFICIAL' && h.official && h.official.type === 'ACCIDENT')) && h.ahead != null && h.ahead > 0)
+    .map(h => ({s: h.s, name: h.type === 'INCIDENT' ? T('사고 지점', 'Crash site') : esc(h.label), ahead: h.ahead})));
 }
 
 function render() {
@@ -513,14 +618,17 @@ function render() {
   if (on && ev.toDest != null) { if (dest0 == null || ev.toDest > dest0) dest0 = ev.toDest; }
   document.getElementById('prog').style.width = on && dest0 ? Math.max(0, Math.min(100, 100 * (1 - ev.toDest / dest0))) + '%' : '0';
   const cs = choices();
-  const chips = cs.map((c, i) => `<button class="chip ${dest === c.s ? 'on' : ''}" onclick="pick(${i})">${icon('flag')} ${c.name} · ${T('전방', '')} ${km(c.ahead)}${T('', ' ahead')}</button>`).join('')
+  const chips = cs.map((c, i) => `<button class="chip ${dest === c.s ? 'on' : ''}" onclick="pick(${i})">${icon(c.er ? 'medical' : 'flag')} ${c.name} · ${T('전방', '')} ${km(c.ahead)}${T('', ' ahead')}</button>`).join('')
     + `<button class="chip ${dest == null ? 'on' : ''}" onclick="pick(-1)">${icon('close')} ${T('목적지 없음', 'No destination')}</button>`;
   document.getElementById('panel').innerHTML = `<div class="card">
       <div class="row"><b>${T('알리는 차', 'Cars alerted')}</b><span>${on && ev.live ? ev.told : 0}${T('대', '')}</span></div>
       <div class="row"><b>${T('사이렌을 들은 차', 'Cars that heard the siren')}</b><span>${ev.heard || 0}${T('대', '')}</span></div>
       <div class="row"><b>${T('길을 비켜 준 차', 'Cars that made way')}</b><span>${ev.yielded || 0}${T('대', '')}</span></div></div>
+    <div class="card"><div class="head">${T('차종', 'Vehicle')}</div><div>${VTYPES.map(v => `<button class="chip ${VTYPE === v ? 'on' : ''}" ${on ? 'disabled' : ''} onclick="setVtype('${v}')">${vname(v)}</button>`).join('')}</div>
+      <p class="hint">${T('차종은 차 안 안내 문구만 바꿔요 — 진로 양보 안내는 같아요', 'The type only changes the wording in cars; the make-way alert is the same')}</p></div>
     <div class="card"><div class="head">${T('목적지', 'Destination')}</div><div>${chips}</div>
-      <p class="hint">${T('목적지를 정하면 구급차와 목적지 사이의 차에만 알려요', 'With a destination, only cars between you and it are alerted')}</p></div>
+      <p class="hint">${T('목적지를 정하면 구급차와 목적지 사이의 차에만 알려요', 'With a destination, only cars between you and it are alerted')}${cs[0] && cs[0].er ? ' · ' + T(`가장 가까운 응급실: ${cs[0].sub}`, `Nearest ER: ${cs[0].sub}`) : ''}</p>
+      <p class="hint">${T('응급실은 공식 응급의료기관 목록의 권역·지역응급의료센터예요. 빨간 띠 = 지금 알리는 구간, 빨간 점 = 알림 받은 차', 'ERs are regional/local emergency centers from the official list. Red band = alert zone, red dots = cars alerted')}</p></div>
     <div class="two"><button class="primary" ${on ? 'disabled' : ''} onclick="setOn(true)">${icon('medical')} ${T('출동 시작', 'Start response')}</button>
       <button ${on ? '' : 'disabled'} onclick="setOn(false)">${T('출동 끝', 'End response')}</button></div>`;
   document.getElementById('about').innerHTML = `<summary>${T('이 화면은', 'About')}</summary>

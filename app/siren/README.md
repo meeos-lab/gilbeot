@@ -7,5 +7,5 @@
 - 입력 `waveform_binary` float32 [15600](16 kHz 모노, −1..1, 0.975초), 출력 [1, 521] 점수
 - 앱이 보는 종류(`yamnet_class_map.csv` 번호): 316 Emergency vehicle, 317 Police car (siren), 318 Ambulance (siren), 319 Fire engine, fire truck (siren), 390 Siren, 391 Civil defense siren
 
-쓰는 곳: `app/src/main/java/ai/meeos/tago/SirenYamnet.kt`. 도로 링크가 있는 판의 APK 에만 `assets/siren/` 으로 들어간다.
+쓰는 곳: 앱의 `SirenYamnet.kt`. 도로 링크가 있는 판의 APK 에만 `assets/siren/` 으로 들어간다.
 문턱·평가: `tools/siren_eval/README.md`, `docs/dev/60-test-quality.md` 1-2 절.

@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>주변 차 화면</title>
+<!--
+  주행 중 왼쪽 판의 "주변 차 화면"(11-14 사용자: 순정 주행 화면 캡처 + "주행할때 이런 화면으로 나오게 만들어줘").
+  순정 문법: 흰 바탕 · 맨 위 큰 속도 숫자 · 뒤 위에서 내려다본 도로 · 흰 찰흙색 차 · 회색 내 차 · 먼 쪽은 옅게 사라짐.
+  그리는 것은 앱이 실제로 아는 것만: 내 차, 함께 가는 차(초록 고리), 앞쪽 위험(차 사고·급정지 = 비상등 켠 차, 그 밖 = 삼각 표지), 뒤에서 오는 긴급차량(빨간 경광등).
+  차로는 허브가 모른다 — 모두 내 차로 앞·뒤에 두고, 거리는 줄여서(가까울수록 실제에 가깝게) 놓고 실제 거리를 글자로 적는다. 센서로 본 주변 일반 차는 없다(그리지 않는다).
+  앱이 window.aroundSet({kmh, unit, night, cars:[{id, kind:'member'|'hazard'|'sign'|'ev', d(m, +앞 −뒤), name, dist, tone}]}) 로 1초마다 넘긴다.
+  외부 라이브러리·그림 파일 없음(2D 캔버스에 직접 원근 투영). 시험: ?demo=1(움직이는 예) · ?demo=2(정지 예) · &night=1
+-->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #f4f4f5; -webkit-user-select: none; user-select: none; }
+  body.night { background: #101113; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #spd { position: absolute; left: 0; right: 0; top: 2.2vh; text-align: center; font-family: system-ui, "Noto Sans KR", sans-serif; color: #0b0c0e; pointer-events: none; }
+  #num { font-size: 13.2vh; line-height: 13.2vh; font-weight: 400; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  #unit { font-size: 3.1vh; line-height: 3.6vh; color: #7b7e85; margin-top: -0.4vh; }
+  body.night #spd { color: #f2f3f5; }
+  body.night #unit { color: #8d9097; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="spd"><div id="num">0</div><div id="unit">km/h</div></div>
+<script>
+"use strict";
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const q = new URLSearchParams(location.search);
+let W = 0, H = 0, DPR = 1;
+
+// ---------------------------------------------------------------- 색(거의 흑백 — 강조는 빨강 #ff453a · 주황 #ff9f0a · 초록 #30d158 만)
+const PAL = {
+  day:   { bgTop: [255,255,255], bg: [242,242,243], line: [205,206,216], clay: [252,252,253], glass: [132,134,140], wheel: [84,86,90],
+           me: [200,203,208], meRoof: [58,60,64], meGlass: [36,38,42], meDark: [44,46,50], text: "#3a3c41", sub: "#8a8d94", shadow: 0.11 },
+  night: { bgTop: [16,17,19], bg: [26,27,30], line: [70,72,80], clay: [196,198,203], glass: [74,76,82], wheel: [30,31,34],
+           me: [128,131,137], meRoof: [22,23,26], meGlass: [12,13,15], meDark: [18,19,21], text: "#e6e7ea", sub: "#8d9097", shadow: 0.30 },
+};
+const RED = [255,69,58], AMBER = [255,159,10], GREEN = [48,209,88];
+let pal = PAL.day;
+
+// ---------------------------------------------------------------- 상태
+const st = { kmh: 0, shownKmh: 0, unit: "km/h", night: false, objs: new Map(), scroll: 0, back: 0, t: 0 };
+function setNight(n) { st.night = !!n; pal = n ? PAL.night : PAL.day; document.body.classList.toggle("night", st.night); }
+
+/** 앱이 부른다(1초마다). 없는 차는 0.6초에 걸쳐 사라지고 새 차는 나타난다 */
+window.aroundSet = function (s) {
+  if (typeof s === "string") { try { s = JSON.parse(s); } catch (e) { return; } }
+  if (!s) return;
+  if (Number.isFinite(s.kmh)) st.kmh = Math.max(0, s.kmh);
+  if (s.unit) { st.unit = s.unit; document.getElementById("unit").textContent = s.unit; }
+  if (s.night !== undefined && !!s.night !== st.night) setNight(s.night);
+  const seen = new Set();
+  (s.cars || []).forEach(function (c) {
+    if (!c || !Number.isFinite(c.d)) return;
+    const id = String(c.id || (c.kind + ":" + (c.name || "")));
+    seen.add(id);
+    let o = st.objs.get(id);
+    if (!o) { o = { id: id, z: zOf(c.d), a: 0 }; st.objs.set(id, o); }
+    o.kind = c.kind; o.d = c.d; o.name = c.name || ""; o.dist = c.dist || ""; o.tone = c.tone || "danger"; o.gone = false;
+  });
+  st.objs.forEach(function (o, id) { if (!seen.has(id)) o.gone = true; });
+};
+
+/**
+ * 실제 거리(m) → 화면 속 거리(m). 앞: 멀수록 눌러서 50 m ≈ 11 · 300 m ≈ 16 · 1 km ≈ 20 · 10 km ≈ 27 — 순정 화면처럼 차들이 내 차 앞 10~45 m 에 보인다.
+ * 뒤: 내 차 바로 뒤 7 m(50 m) ~ 10 m(4 km) — 뒤는 화면 자리가 좁아 더 세게 누른다(멀어도 차체가 화면 안에 들어오게)
+ */
+function zOf(d) { return d >= 0 ? 6 + 3.0 * Math.log(1 + d / 10) :-(6.2 + 0.9 * Math.log(1 + (-d) / 50)); }
+const MAX_AHEAD = 3;   // 앞쪽은 가까운 것부터 이만큼만 그린다(한 줄에 너무 많이 세우면 읽을 수 없다 — 나머지는 지도·안내 판이 알려 준다)
+const GAP = 11;   // 화면 속 차 사이 최소 간격(m) — 눌러 놓은 거리라 가까운 차들이 겹치지 않게 벌린다(순서는 실제 그대로)
+
+// ---------------------------------------------------------------- 카메라(내 차 뒤 위에서 앞을 내려다봄). back = 뒤에 긴급차량이 있을 때 0→1(뒤가 보이게 물러난다)
+const cam = { h: 8.6, D: 13.0, pitch: 17 * Math.PI / 180, f: 0.85 };
+function camNow() {
+  const b = st.back;
+  return { h: cam.h + 2.3 * b, D: cam.D + 10.0 * b, pitch: cam.pitch + 2.5 * Math.PI / 180 * b, f: cam.f * (1 + 0.05 * b) };
+}
+let C = camNow(), sinP = 0, cosP = 1, F = 1;
+function proj(x, y, z) {   // 세계(x 오른쪽, y 위, z 앞 — 내 차 가운데가 원점) → [화면 x, 화면 y, 깊이]
+  const py = y - C.h, pz = z + C.D;
+  const yc = py * cosP + pz * sinP, zc = -py * sinP + pz * cosP;
+  if (zc < 0.6) return null;
+  return [W / 2 + F * x / zc, H * 0.5 - F * yc / zc, zc];
+}
+function fogOf(z) { return Math.max(0, Math.min(1, (z - 48) / 110)); }   // 먼 쪽은 바탕색으로 옅어진다
+function mix(c, bg, k) { return [c[0] + (bg[0] - c[0]) * k, c[1] + (bg[1] - c[1]) * k, c[2] + (bg[2] - c[2]) * k]; }
+function rgb(c, a) { return "rgba(" + (c[0] | 0) + "," + (c[1] | 0) + "," + (c[2] | 0) + "," + (a === undefined ? 1 : a) + ")"; }
+
+// ---------------------------------------------------------------- 차 모양(저폴리): 앞뒤로 나눈 단면들을 이어 만든다.
+// 단면 = [z, 바닥 y, 바닥 반폭, 허리선 y, 허리선 반폭, 지붕 y, 지붕 반폭] — 지붕 y 가 허리선과 같으면 그 자리는 실내가 없다(보닛·트렁크)
+// top = 단면 사이 윗면 재질, up = 단면 사이 옆 윗부분(창·기둥) 재질
+const SHAPES = {
+  sedan: { L: 4.7, body: "clay", wheelZ: [-1.42, 1.45], wheelR: 0.33,
+    sec: [[-2.35,0.40,0.80,0.93,0.85,0.93,0.80], [-2.12,0.30,0.90,1.00,0.92,1.00,0.86], [-1.50,0.30,0.92,1.03,0.93,1.06,0.82], [-0.82,0.30,0.92,1.03,0.93,1.43,0.70],
+          [0.38,0.30,0.92,1.02,0.93,1.45,0.70], [1.12,0.30,0.92,1.00,0.92,1.02,0.82], [2.08,0.30,0.88,0.86,0.88,0.88,0.76], [2.35,0.38,0.78,0.74,0.80,0.74,0.72]],
+    top: ["clay","clay","glass","clay","glass","clay","clay"], up: ["clay","clay","clay","glass","clay","clay","clay"] },
+  // 내 차: 해치백(뒤가 거의 서 있고 뒷유리가 기운다), 지붕은 짙은 유리
+  me: { L: 4.64, body: "me", wheelZ: [-1.50, 1.50], wheelR: 0.37,
+    sec: [[-2.33,0.40,0.82,1.05,0.88,1.05,0.82], [-2.16,0.32,0.94,1.10,0.97,1.16,0.90], [-1.86,0.32,0.95,1.10,0.97,1.63,0.76], [-0.80,0.32,0.95,1.09,0.97,1.67,0.75], [0.20,0.32,0.95,1.08,0.97,1.65,0.75],
+          [1.06,0.32,0.94,1.06,0.96,1.10,0.84], [2.12,0.34,0.90,0.95,0.90,0.96,0.80], [2.32,0.42,0.80,0.84,0.82,0.84,0.74]],
+    top: ["me","me","me","me","meGlass","me","me"], up: ["me","me","meGlass","meGlass","meGlass","me","me"] },
+  // 긴급차량: 승합 구급차 꼴(상자형 + 지붕 경광등)
+  van: { L: 5.2, body: "clay", wheelZ: [-1.70, 1.72], wheelR: 0.36,
+    sec: [[-2.60,0.36,0.93,1.15,0.97,1.96,0.93], [-2.42,0.32,0.96,1.15,0.98,2.14,0.90], [1.22,0.32,0.96,1.15,0.98,2.14,0.90], [2.02,0.32,0.96,1.12,0.97,1.20,0.86], [2.58,0.38,0.88,0.98,0.90,0.98,0.82]],
+    top: ["clay","clay","glass","clay"], up: ["clay","clay","glass","clay"] },
+};
+const LIGHT = norm([-0.35, 0.85, -0.40]);
+function norm(v) { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; }
+
+/** 차 한 대의 면 목록(차 좌표): {p: 꼭짓점들, m: 재질 이름, layer: 같은 자리 위에 덧그릴 순서, n: 바깥 법선, c: 가운데} */
+function buildFaces(sh) {
+  const S = sh.sec, faces = [];
+  const add = function (p, m, layer) { faces.push({ p: p, m: m, layer: layer || 0 }); };
+  for (let i = 0; i < S.length - 1; i++) {
+    const a = S[i], b = S[i + 1];
+    add([[-a[6], a[5], a[0]], [a[6], a[5], a[0]], [b[6], b[5], b[0]], [-b[6], b[5], b[0]]], sh.top[i]);          // 윗면(지붕·보닛·유리)
+    [-1, 1].forEach(function (s) {
+      add([[s * a[2], a[1], a[0]], [s * a[4], a[3], a[0]], [s * b[4], b[3], b[0]], [s * b[2], b[1], b[0]]], sh.body);   // 옆 아랫부분(차체)
+      if (a[5] > a[3] + 0.02 || b[5] > b[3] + 0.02)                                                                // 옆 윗부분(창·기둥)
+        add([[s * a[4], a[3], a[0]], [s * a[6], a[5], a[0]], [s * b[6], b[5], b[0]], [s * b[4], b[3], b[0]]], sh.up[i]);
+    });
+  }
+  [0, S.length - 1].forEach(function (i) {   // 뒤·앞 마구리
+    const a = S[i];
+    add([[a[2], a[1], a[0]], [a[4], a[3], a[0]], [a[6], a[5], a[0]], [-a[6], a[5], a[0]], [-a[4], a[3], a[0]], [-a[2], a[1], a[0]]], sh.body);
+  });
+  const hw = Math.max(S[1][2], S[1][4]);
+  [-1, 1].forEach(function (s) {
+    sh.wheelZ.forEach(function (wz) {          // 옆에서 보이는 바퀴(십각형)
+      const R = sh.wheelR, x = s * (hw + 0.015), ring = [];
+      for (let k = 0; k < 10; k++) { const an = k / 10 * Math.PI * 2; ring.push([x, R + R * Math.sin(an), wz + R * Math.cos(an)]); }
+      faces.push({ p: ring, m: "wheel", layer: 2, fixedN: [s, 0, 0] });
+    });
+    const zr = sh.wheelZ[0] - sh.wheelR * 0.55;   // 뒤에서 보이는 타이어 밑동(차체 아래로 내려온 부분)
+    faces.push({ p: [[s * hw, 0, zr], [s * (hw - 0.25), 0, zr], [s * (hw - 0.25), S[1][1] + 0.06, zr], [s * hw, S[1][1] + 0.06, zr]], m: "wheel", layer: -2, fixedN: [0, 0, -1] });
+  });
+  faces.forEach(function (f) {   // 바깥을 향한 법선(차 가운데에서 멀어지는 쪽)
+    let cx = 0, cy = 0, cz = 0; f.p.forEach(function (v) { cx += v[0]; cy += v[1]; cz += v[2]; });
+    f.c = [cx / f.p.length, cy / f.p.length, cz / f.p.length];
+    if (f.fixedN) { f.n = f.fixedN; return; }
+    const a = f.p[0], b = f.p[1], c = f.p[2];
+    let n = norm([(b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]), (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]), (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])]);
+    if (n[0] * f.c[0] + n[1] * (f.c[1] - 0.75) + n[2] * f.c[2] < 0) n = [-n[0], -n[1], -n[2]];
+    f.n = n;
+  });
+  return faces;
+}
+const MESH = {}; Object.keys(SHAPES).forEach(function (k) { MESH[k] = buildFaces(SHAPES[k]); });
+
+function poly(pts, fill) {
+  ctx.beginPath();
+  for (let i = 0; i < pts.length; i++) { if (i === 0) ctx.moveTo(pts[i][0], pts[i][1]); else ctx.lineTo(pts[i][0], pts[i][1]); }
+  ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+}
+/** 세계 좌표 꼭짓점들을 투영해 채운다(하나라도 카메라 뒤면 그리지 않는다) */
+function quad3(pts, fill) {
+  const s = [];
+  for (let i = 0; i < pts.length; i++) { const p = proj(pts[i][0], pts[i][1], pts[i][2]); if (!p) return false; s.push(p); }
+  poly(s, fill); return true;
+}
+
+/** 차 한 대 그리기: 그림자 → 면(먼 것부터) → 등화. X·Z = 차 가운데 자리, alpha = 나타남 정도, fog = 옅어짐 */
+function drawCar(kind, X, Z, alpha, extra) {
+  const sh = SHAPES[kind], faces = MESH[kind], fog = fogOf(Z), bgc = pal.bg;
+  const half = sh.L / 2, hw = sh.sec[1][4];
+  ctx.globalAlpha = alpha;
+  // 차 밑 옅은 그림자: 가장자리가 흐린 타원(바닥에 누운 꼴)
+  const sa = pal.shadow * (1 - fog) * 1.7;
+  const pc = proj(X, 0, Z - 0.25), pl = proj(X - hw - 0.38, 0, Z), pn = proj(X, 0, Z - half - 0.5), pf = proj(X, 0, Z + half + 0.2);
+  if (pc && pl && pn && pf) {
+    const rx = Math.abs(pc[0] - pl[0]), ry = Math.max(2, (pn[1] - pf[1]) / 2), cy = (pn[1] + pf[1]) / 2;
+    ctx.save(); ctx.translate(pc[0], cy); ctx.scale(1, ry / rx);
+    const g = ctx.createRadialGradient(0, 0, rx * 0.35, 0, 0, rx);
+    g.addColorStop(0, "rgba(0,0,0," + sa.toFixed(3) + ")"); g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, rx, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  }
+  if (extra && extra.ring) ring(X, Z, hw + 0.75, half + 0.75, extra.ring, 1 - fog);
+  const camPos = [0, C.h, -C.D], list = [];
+  for (let i = 0; i < faces.length; i++) {
+    const f = faces[i], c = f.c;
+    const vx = camPos[0] - (c[0] + X), vy = camPos[1] - c[1], vz = camPos[2] - (c[2] + Z);
+    if (f.n[0] * vx + f.n[1] * vy + f.n[2] * vz <= 0) continue;   // 카메라를 등진 면
+    const s = [];
+    let ok = true, zsum = 0;
+    for (let k = 0; k < f.p.length; k++) { const p = proj(f.p[k][0] + X, f.p[k][1], f.p[k][2] + Z); if (!p) { ok = false; break; } s.push(p); zsum += p[2]; }
+    if (!ok) continue;
+    list.push({ s: s, z: zsum / s.length - f.layer * 0.6, f: f });
+  }
+  list.sort(function (a, b) { return b.z - a.z; });
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i].f, base = pal[f.m] || pal.clay;
+    const nl = Math.max(0, f.n[0] * LIGHT[0] + f.n[1] * LIGHT[1] + f.n[2] * LIGHT[2]);
+    const lit = f.m === "wheel" ? 1 : f.m === "me" ? 0.60 + 0.40 * nl : 0.74 + 0.26 * nl;   // 내 차(금속 회색)는 면마다 밝기 차이를 더 준다
+    poly(list[i].s, rgb(mix([base[0] * lit, base[1] * lit, base[2] * lit], bgc, fog)));
+  }
+  if (extra && extra.after) extra.after(X, Z, fog);
+  ctx.globalAlpha = 1;
+}
+
+/** 차 밑 얇은 고리(함께 가는 차) */
+function ring(X, Z, rx, rz, col, k) {
+  ctx.beginPath();
+  for (let i = 0; i <= 40; i++) {
+    const an = i / 40 * Math.PI * 2, p = proj(X + rx * Math.cos(an), 0.02, Z + rz * Math.sin(an));
+    if (!p) return;
+    if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+  }
+  ctx.strokeStyle = rgb(col, 0.9 * k); ctx.lineWidth = Math.max(1.5, W * 0.006); ctx.stroke();
+}
+
+/** 뒷면에 붙는 네모(등화·번호판 등): 차 좌표 x0..x1, y0..y1, z */
+function rear(X, Z, x0, x1, y0, y1, z, fill) { return quad3([[X + x0, y0, Z + z], [X + x1, y0, Z + z], [X + x1, y1, Z + z], [X + x0, y1, Z + z]], fill); }
+function glow(X, y, Z, r, col, a) {
+  const p = proj(X, y, Z); if (!p) return;
+  const R = F * r / p[2], g = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], R);
+  g.addColorStop(0, rgb(col, a)); g.addColorStop(1, rgb(col, 0));
+  ctx.fillStyle = g; ctx.fillRect(p[0] - R, p[1] - R, R * 2, R * 2);
+}
+
+// 내 차 뒷모습: 가로 등화 띠(네모 점 등) · 번호판 · 짙은 아래 범퍼 · 은색 판 · 옆 거울
+function meDetails(X, Z, fog) {
+  const z = -2.336, d = pal.meDark;
+  // 지붕: 차체 색 테두리 안에 짙은 유리(뒤쪽은 지붕 끝 날개 자리를 남긴다)
+  quad3([[X - 0.61, 1.650, Z - 1.62], [X + 0.61, 1.650, Z - 1.62], [X + 0.61, 1.672, Z - 0.80], [X - 0.61, 1.672, Z - 0.80]], rgb(pal.meRoof));
+  quad3([[X - 0.61, 1.672, Z - 0.80], [X + 0.61, 1.672, Z - 0.80], [X + 0.61, 1.652, Z + 0.06], [X - 0.61, 1.652, Z + 0.06]], rgb(pal.meRoof));
+  // 뒷유리: 차체 색 기둥 사이에 좁게(지붕 끝 아래로 기운 면)
+  quad3([[X - 0.70, 1.22, Z - 2.125], [X + 0.70, 1.22, Z - 2.125], [X + 0.62, 1.565, Z - 1.905], [X - 0.62, 1.565, Z - 1.905]], rgb(pal.meGlass));
+  rear(X, Z, -0.80, 0.80, 0.41, 0.63, z, rgb(d));                       // 아래 범퍼(짙게)
+  rear(X, Z, -0.48, 0.48, 0.42, 0.50, z - 0.004, rgb([200, 202, 206]));  // 은색 판
+  rear(X, Z, -0.84, 0.84, 0.87, 1.02, z, rgb(d));                       // 등화 띠
+  for (let i = 0; i < 4; i++) {                                         // 양 끝 네모 점 등(은은한 붉은빛)
+    rear(X, Z, -0.80 + i * 0.105, -0.72 + i * 0.105, 0.905, 0.985, z - 0.004, rgb([214, 96, 88]));
+    rear(X, Z, 0.72 - i * 0.105, 0.80 - i * 0.105, 0.905, 0.985, z - 0.004, rgb([214, 96, 88]));
+  }
+  rear(X, Z, -0.27, 0.27, 0.67, 0.81, z - 0.004, rgb([236, 237, 240]));  // 번호판
+  [-1, 1].forEach(function (s) {                                        // 옆 거울
+    quad3([[X + s * 0.95, 1.10, Z + 0.86], [X + s * 1.14, 1.10, Z + 0.84], [X + s * 1.14, 1.24, Z + 0.84], [X + s * 0.95, 1.22, Z + 0.86]], rgb(pal.meRoof));
+  });
+}
+// 비상등 켠 차: 뒤 양 모서리 주황 등이 깜빡인다(1.4 Hz)
+function hazardLights(X, Z, fog) {
+  const on = (st.t * 1.4) % 1 < 0.55, col = on ? AMBER : mix(AMBER, [120, 80, 30], 0.75), z = -2.36;
+  rear(X, Z, -0.80, -0.50, 0.70, 0.88, z, rgb(mix(col, pal.bg, fog)));
+  rear(X, Z, 0.50, 0.80, 0.70, 0.88, z, rgb(mix(col, pal.bg, fog)));
+  if (on) { glow(X - 0.65, 0.79, Z + z, 1.0, AMBER, 0.42 * (1 - fog)); glow(X + 0.65, 0.79, Z + z, 1.0, AMBER, 0.42 * (1 - fog)); }
+}
+// 긴급차량: 지붕 경광등(빨강 단색 — 한국 구급차), 좌우가 번갈아 두 번씩 번쩍인다 + 뒤 위 모서리 붉은 등
+function evLights(X, Z, fog) {
+  const ph = (st.t * 2.2) % 1, left = ph < 0.5, flick = (ph * 8 % 1) < 0.6;
+  const bar = function (x0, x1, lit) {
+    const c = lit ? RED : mix(RED, [70, 14, 12], 0.72);
+    quad3([[X + x0, 2.15, Z + 0.25], [X + x1, 2.15, Z + 0.25], [X + x1, 2.33, Z + 0.25], [X + x0, 2.33, Z + 0.25]], rgb(mix(c, pal.bg, fog)));       // 뒤쪽 면
+    quad3([[X + x0, 2.33, Z + 0.25], [X + x1, 2.33, Z + 0.25], [X + x1, 2.33, Z + 0.75], [X + x0, 2.33, Z + 0.75]], rgb(mix(mix(c, [255, 255, 255], lit ? 0.18 : 0), pal.bg, fog)));   // 윗면
+    if (lit) glow(X + (x0 + x1) / 2, 2.3, Z + 0.4, 1.7, RED, 0.45 * (1 - fog));
+  };
+  bar(-0.72, -0.03, left && flick); bar(0.03, 0.72, !left && flick);
+  const z = -2.61;
+  rear(X, Z, -0.90, -0.66, 1.62, 1.84, z, rgb(mix(left && flick ? RED : mix(RED, [90, 20, 16], 0.6), pal.bg, fog)));
+  rear(X, Z, 0.66, 0.90, 1.62, 1.84, z, rgb(mix(!left && flick ? RED : mix(RED, [90, 20, 16], 0.6), pal.bg, fog)));
+  rear(X, Z, -0.60, 0.60, 0.62, 0.70, z, rgb(mix(RED, pal.bg, 0.35 + 0.65 * fog)));   // 뒤 가로 붉은 띠
+}
+// 차가 아닌 위험(낙하물·정체 꼬리·비 등): 길 위에 선 삼각 표지
+function drawSign(X, Z, alpha, tone) {
+  const fog = fogOf(Z), col = tone === "caution" ? AMBER : RED;
+  ctx.globalAlpha = alpha;
+  quad3([[X - 0.7, 0, Z - 0.3], [X + 0.7, 0, Z - 0.3], [X + 0.7, 0, Z + 0.3], [X - 0.7, 0, Z + 0.3]], "rgba(0,0,0," + (pal.shadow * (1 - fog)).toFixed(3) + ")");
+  const a = proj(X - 0.78, 0.08, Z), b = proj(X + 0.78, 0.08, Z), c = proj(X, 1.42, Z);
+  if (a && b && c) {
+    poly([a, b, c], rgb(mix(col, pal.bg, fog)));
+    const k = 0.62, mx = (a[0] + b[0] + c[0]) / 3, my = (a[1] + b[1] + c[1]) / 3;
+    poly([a, b, c].map(function (p) { return [mx + (p[0] - mx) * k, my + (p[1] - my) * k]; }), rgb(mix(pal.clay, pal.bg, fog)));
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------- 도로: 내 차로 양쪽 선(끊긴 선이 속도만큼 흐른다) + 바깥 차로 선(옅은 실선)
+const LANE = 3.6;
+function drawRoad() {
+  const lw = 0.085, z0 = -C.D + 1.2, z1 = 175;
+  [-1.5, 1.5].forEach(function (k) {   // 바깥 차로 선: 실선, 더 옅게
+    const x = k * LANE;
+    for (let z = z0; z < z1; z += 6) seg(x, z, Math.min(z + 6.05, z1), lw * 0.9, 0.55);
+  });
+  const period = 20, dash = 8;       // 고속도로 차선: 8 m 선 + 12 m 사이
+  const off = st.scroll % period;
+  [-0.5, 0.5].forEach(function (k) {
+    const x = k * LANE;
+    for (let z = Math.floor((z0 + off) / period) * period - off; z < z1; z += period) {
+      const a = Math.max(z, z0), b = Math.min(z + dash, z1);
+      if (b > a) seg(x, a, b, lw, 1);
+    }
+  });
+}
+function seg(x, za, zb, w, k) {
+  const f = fogOf((za + zb) / 2);
+  if (f >= 1) return;
+  quad3([[x - w, 0, za], [x + w, 0, za], [x + w, 0, zb], [x - w, 0, zb]], rgb(mix(pal.line, pal.bg, f), k));
+}
+
+// ---------------------------------------------------------------- 이름표: 차 위에 이름(굵게) + 실제 거리
+function label(X, hw, yMid, Z, name, dist, alpha, side) {   // 차 옆(side = 1 오른쪽 · −1 왼쪽)에 한 줄: 이름(굵게) 거리
+  const p = proj(X + side * (hw + 0.7), yMid, Z); if (!p) return;
+  const fog = fogOf(Z), fs = Math.max(11, W * 0.040);
+  ctx.globalAlpha = alpha * (1 - fog * 0.5);
+  ctx.textBaseline = "middle"; ctx.textAlign = side > 0 ? "left" : "right";
+  const fn = "600 " + fs + "px system-ui, sans-serif", fd = "400 " + fs + "px system-ui, sans-serif";
+  ctx.font = fn; const wn = name ? ctx.measureText(name + " ").width : 0;
+  ctx.font = fd; const wAll = wn + (dist ? ctx.measureText(dist).width : 0), pad = fs * 0.5;
+  if (side > 0) p[0] = Math.min(p[0], W - pad - wAll); else p[0] = Math.max(p[0], pad + wAll);   // 판 밖으로 나가지 않게
+  if (side > 0) {
+    if (name) { ctx.font = fn; ctx.fillStyle = pal.text; ctx.fillText(name, p[0], p[1]); }
+    if (dist) { ctx.font = fd; ctx.fillStyle = pal.sub; ctx.fillText(dist, p[0] + wn, p[1]); }
+  } else {
+    ctx.font = fd; const wd = dist ? ctx.measureText(dist).width : 0;
+    if (dist) { ctx.fillStyle = pal.sub; ctx.fillText(dist, p[0], p[1]); }
+    if (name) { ctx.font = fn; ctx.fillStyle = pal.text; ctx.fillText(name, p[0] - wd - fs * 0.3, p[1]); }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------- 한 장 그리기
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(1, Math.round(cv.clientWidth * DPR)); H = Math.max(1, Math.round(cv.clientHeight * DPR));
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+}
+function frame(dt) {
+  resize();
+  st.t += dt;
+  // 속도 숫자는 0.4초쯤에 따라간다, 차선은 속도만큼 흐른다
+  st.shownKmh += (st.kmh - st.shownKmh) * Math.min(1, dt * 4);
+  const shown = Math.round(st.shownKmh);
+  const el = document.getElementById("num"); if (el.textContent !== String(shown)) el.textContent = String(shown);
+  st.scroll += st.shownKmh / 3.6 * dt;
+  let behind = false;
+  st.objs.forEach(function (o) { if (!o.gone && o.d < 0 && o.kind === "ev") behind = true; });
+  st.back += ((behind ? 1 : 0) - st.back) * Math.min(1, dt * 1.6);
+  C = camNow(); sinP = Math.sin(C.pitch); cosP = Math.cos(C.pitch); F = C.f * H;
+
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, rgb(pal.bgTop)); g.addColorStop(0.20, rgb(pal.bgTop)); g.addColorStop(0.34, rgb(pal.bg)); g.addColorStop(1, rgb(pal.bg));
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  drawRoad();
+
+  // 놓을 자리: 실제 거리 순서 그대로, 눌러 놓은 거리가 겹치면 GAP 만큼 벌린다(앞은 앞으로, 뒤는 뒤로)
+  const live = []; st.objs.forEach(function (o) { live.push(o); });
+  live.sort(function (a, b) { return a.d - b.d; });
+  let zPrev = -Infinity, nAhead = 0;
+  live.forEach(function (o) {
+    if (o.d < 0) return;
+    o.hide = !o.gone && ++nAhead > MAX_AHEAD;   // 먼 것은 그리지 않는다(가까워지면 나타난다)
+    if (o.hide) { o.zt = zPrev + GAP; return; }
+    o.zt = Math.max(zOf(o.d), zPrev + GAP); zPrev = o.zt; o.side = nAhead % 2 === 1 ? 1 : -1;   // 이름표는 좌우 번갈아
+  });
+  zPrev = Infinity;
+  for (let i = live.length - 1; i >= 0; i--) { const o = live[i]; if (o.d < 0) { o.hide = false; o.side = 1; o.zt = Math.min(zOf(o.d), zPrev - GAP); zPrev = o.zt; } }
+
+  const items = [{ me: true, z: 0 }];
+  live.forEach(function (o) {
+    o.z += (o.zt - o.z) * Math.min(1, dt * 2.2);
+    o.a += ((o.gone || o.hide ? 0 : 1) - o.a) * Math.min(1, dt * 3);
+    if (o.gone && o.a < 0.02) { st.objs.delete(o.id); return; }
+    if (o.a >= 0.02) items.push(o);
+  });
+  items.sort(function (a, b) { return b.z - a.z; });   // 먼 것부터
+  items.forEach(function (o) {
+    if (o.me) { drawCar("me", 0, 0, 1, { after: meDetails }); return; }
+    if (o.z + C.D < 3.2) return;   // 카메라 바로 앞·뒤는 그리지 않는다
+    if (o.kind === "sign") { drawSign(0, o.z, o.a, o.tone); label(0, 0.8, 0.7, o.z, o.name, o.dist, o.a, o.side); }
+    else if (o.kind === "ev") { drawCar("van", 0, o.z, o.a, { after: evLights }); label(0, 1.0, 1.2, o.z, o.name, o.dist, o.a, o.side); }
+    else if (o.kind === "hazard") { drawCar("sedan", 0, o.z, o.a, { after: hazardLights }); label(0, 0.95, 0.8, o.z, o.name, o.dist, o.a, o.side); }
+    else { drawCar("sedan", 0, o.z, o.a, { ring: GREEN }); label(0, 1.7, 0.8, o.z, o.name, o.dist, o.a, o.side); }
+  });
+}
+
+// 움직임이 느려 초당 20장만 그린다(에뮬레이터는 소프트웨어 그리기)
+let last = 0;
+function loop(now) {
+  if (now - last >= 48) { const dt = last ? Math.min(0.25, (now - last) / 1000) : 0.05; last = now; frame(dt); }
+  requestAnimationFrame(loop);
+}
+setNight(q.get("night") === "1");
+requestAnimationFrame(loop);
+/** 시험용: n 번(각 0.1초) 앞으로 돌려 바로 그린다 — 가려진 탭은 그리기가 느려져 화면 확인이 어렵다 */
+window.aroundStep = function (n) { for (let i = 0; i < (n || 1); i++) frame(0.1); };
+
+// ---------------------------------------------------------------- 시험용 예(?demo=1 움직임 · ?demo=2 정지)
+if (q.get("demo")) {
+  const t0 = performance.now(), still = q.get("demo") === "2";
+  const km = function (m) { m = Math.abs(m); return m >= 1000 ? (m / 1000).toFixed(1) + " km" : Math.round(m / 10) * 10 + " m"; };
+  const tick = function () {
+    const t = still ? 14 : (performance.now() - t0) / 1000;
+    const hz = 1500 - t * 55, ev = -2200 + t * 70;
+    const cars = [{ id: "m1", kind: "member", d: 420 + 60 * Math.sin(t / 5), name: "엄마", dist: km(420) }, { id: "m2", kind: "member", d: 5200, name: "아빠", dist: "5.2 km" }];
+    if (hz > 10) cars.push({ id: "h1", kind: "hazard", d: hz, name: "", dist: km(hz) + " 앞" });
+    if (t > 6) cars.push({ id: "s1", kind: "sign", d: 2600 - t * 20, name: "", dist: km(2600 - t * 20) + " 앞", tone: "caution" });
+    if (q.get("ev") !== "0" && t > 10 && ev < -15) cars.push({ id: "e1", kind: "ev", d: ev, name: "구급차", dist: km(ev) + " 뒤" });
+    window.aroundSet({ kmh: 80 + Math.round(6 * Math.sin(t / 3)), unit: "km/h", cars: cars });
+  };
+  tick(); setInterval(tick, 1000);
+}
+</script>
+</body>
+</html>

@@ -44,7 +44,7 @@ sha256: Whelen.ogg `3262ec37…1fa433`, 201775378.wav `8384908d…ba361e`(`prep_
 학습한 판별 층 기록 `tools/siren_eval/models/siren_head.json`(sireNNet + LSSiren 절반으로 학습, 기본 YAMNet 보다 못해 기각 — ADR-35)은 학습 자료 원본 권리가 불명확해 **2026-11-06 저장소에서 제거**(사용자 승인). 결과 수치만 README·60 에 남긴다. 저장소에 학습 산출물은 없다.
 
 ## 6. 차 안 조건 모델(2026-11-06, `cabin_streams.py`) — 평가에만, 출처는 공개 논문의 그래프에서 읽은 값
-앱은 창을 닫은 차 안 마이크로 듣는다. 실차 녹음은 아직 없어(사용자가 차 안에서 한국 사이렌을 녹음할 계획) 아래 두 출처로 전달 특성을 흉내 냈다.
+앱은 창을 닫은 차 안 마이크로 듣는다. 실차 녹음은 없어(다음 단계도 실차 녹음이 아니라, 녹음한 사이렌 음원을 조건별로 다시 트는 재현 실증) 아래 두 출처로 전달 특성을 흉내 냈다.
 | 항목 | 출처 | 쓴 값 | 한계 |
 |---|---|---|---|
 | 차체 차음(소음 저감 NR, 1/3 옥타브) | C. Q. Howard, A. J. Maddern, E. P. Privopoulos, "Acoustic characteristics for effective ambulance sirens", *Acoustics Australia* 39(2), 2011, pp. 43–53 — 그림 4 "Noise reduction of an average passenger vehicle"(https://www.acoustics.asn.au/journal/2011/2011_39_2_Howard.pdf) | 2005 Mitsubishi Magna 왜건, 문·창 닫음, 백색소음 스피커 앞·옆·뒤 3곳(마이크에서 4.2 m), 운전석 마이크, 차 있을 때/없을 때 차. 세 위치 평균을 그래프에서 읽음(±2 dB): 100 Hz 17, 250 Hz 22, 500 Hz 27, 1 kHz 36, 2 kHz 32, 4 kHz 38, 8 kHz 35 dB(전체 표는 `cabin_streams.py` `NR_CABIN`) | 차 1대·2005년식; 요즘 차(이중 접합 유리, EV)는 다를 수 있다. 읽은 값이라 ±2 dB. 25 Hz 아래·8 kHz 위는 끝값 유지 |

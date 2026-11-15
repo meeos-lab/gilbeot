@@ -37,6 +37,8 @@
            width:100%; margin-top:12px; cursor:pointer; transition:transform 80ms, background-color 80ms; }
   button:active { transform:scale(.97); background:var(--face); }
   button[disabled] { color:var(--sub); cursor:default; }
+  /* 서버 응답이 10초 넘게 없으면 맨 위 띠(차량 앱 검증 V-03, 2026-11-13): 지도·목록이 마지막 값에 멈춰 있어도 현재처럼 보이지 않게 */
+  .stale-bar { position:fixed; left:0; right:0; top:0; z-index:9999; display:none; padding:10px 16px; background:var(--ink); color:var(--onink); font-size:15px; font-weight:700; line-height:20px; text-align:center; }
   .primary { background:var(--ink); color:var(--onink); border-color:var(--ink); font-weight:700; } .primary:active { background:var(--ink); opacity:.85; }
   .primary[disabled] { background:var(--line); border-color:var(--line); color:var(--onink); }
   .ghost { background:var(--card); color:var(--text); }
@@ -56,6 +58,11 @@
   .carpin.web { border-style:dashed; }
   /* 위험 표지: 주의 표지(삼각) 그림만, 바탕 판 없이(가운데가 위치). 차 화면 48 · 휴대폰 36. 아직 한 대만 본 위험은 흐리게 */
   .hzs { width:100%; height:100%; display:block; } .hzs.cand { opacity:.6; }
+  /* 방향 구분(11-14 저녁, 사용자 "상행과 하행에 따라 경고 마커 구분"): 허브가 side 를 붙여 준 위험(일반 도로의 맞은편 · 방향 불확실)은 같은 표지를 흐리게, 이름표는 옅은 글·옅은 테두리 — 내 쪽 위험처럼 보이지 않게 */
+  .hzs.side { opacity:.42; }
+  .tag.side, .leaflet-tooltip.tag.side { color:#6E6E6E; border-color:#E6E6E6; font-weight:400; }
+  body.car.dark .tag.side, body.car.dark .leaflet-tooltip.tag.side, body.car.dark .tmlbl.tag.side { color:#9E9E9E; border-color:#303030; }
+  @media (prefers-color-scheme: dark) { body:not(.car) .tag.side, body:not(.car) .leaflet-tooltip.tag.side, body:not(.car) .tmlbl.tag.side { color:#9E9E9E; border-color:#303030; } }
   .restsign { width:100%; height:100%; display:block; }
   .rest { width:24px; height:24px; box-sizing:border-box; border-radius:50%; background:#FFFFFF; border:2px solid #FF8A00; display:flex; align-items:center; justify-content:center; }
   .rest svg { width:14px; height:14px; color:#FF8A00; } .rest.small { border-color:#9E9E9E; } .rest.small svg { color:#9E9E9E; }
@@ -69,6 +76,10 @@
   body.car.dark .leaflet-tooltip.tag, body.car.dark .tmlbl.tag { background:#1C1C1C; color:#F2F2F2; border-color:#3A3A3A; }
   /* TMAP 바탕(앱키가 있을 때만 body.tmap): 라벨은 Leaflet 툴팁 대신 TMAP 마커 안에 들어간다 */
   body.tmap #map { position:relative; }
+  /* TMAP 지도가 준비되기 전(첫 실행은 길다)에 SDK 가 그리는 회색 워터마크 판을 가리는 안내. 'ConfigLoad' 신호로만 걷는다(시간으로 걷지 않음). 모양은 차 앱의 지도 자리 안내 문구와 같다(mapBg·text2) */
+  #maploading { position:absolute; left:0; top:0; right:0; bottom:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:0 48px; text-align:center; font-size:20px; line-height:28px; color:#6E6E6E; background:#F2F2F2; }
+  body.car.dark #maploading { color:#9E9E9E; background:#242424; }
+  @media (prefers-color-scheme: dark) { body:not(.car) #maploading { color:#9E9E9E; background:#2A2A2A; } }
   body.tmap .tmlbl { white-space:nowrap; font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif; }
   .leaflet-bar, .leaflet-bar a, .leaflet-bar a:first-child, .leaflet-bar a:last-child { border-radius:0; }
   .leaflet-bar { border:1px solid var(--line); box-shadow:none; }
@@ -96,6 +107,51 @@
   .leaflet-container, #map { background:#F2F3F0; }
   @media (prefers-color-scheme: dark) { body:not(.car) .leaflet-container, body:not(.car) #map { background:#0C0C0C; } }
   body.car.dark { background:#1C1C1C; } body.car.dark .leaflet-container, body.car.dark #map { background:#0C0C0C; }   /* 순정 야간 테마(차 앱이 ?dark=1 로 알려 준다) */
+  /* 차 화면 첫 화면(길 안내 없음)의 내 위치(11-13): 지름 32 파란 점(흰 테두리 4) + 숨 쉬는 옅은 후광. 화살표 없음 — 함께 가기 주행 화면은 아래 .mecur 하나.
+     후광 = 점 둘레 그림자 퍼짐 0 → 12(지름 56)이 2초 동안 커지며 옅어지고 다시 처음부터(사라진 뒤 되돌아가 튀지 않는다), 점은 가만히.
+     transform 애니메이션은 쓰지 않는다 — 에뮬레이터 WebView 가 WebGL 지도 위 합성 층을 못 그려 후광이 아예 안 보였다(11-13) */
+  /* 11-14 크기(사용자 "마커가 너무 크고 화면 크기에 비례해서"): 지도 짧은 변에 비례하는 변수(applyMapU)로 — 점(흰 테 포함) 22u = 노선(12u + 테 2.5u×2)의 약 1.3배,
+     흰 테 3u, 후광 퍼짐 8u(후광 지름 = 점의 약 1.7배). u = 지도 짧은 변 ÷ 1000 CSS px, 0.55~1.25. 예전 고정값: 점 32·테 4·후광 12 */
+  .meloc { position:relative; width:var(--me-box, 32px); height:var(--me-box, 32px); pointer-events:none; }
+  .meloc b { position:absolute; left:var(--me-halo, 6px); top:var(--me-halo, 6px); width:var(--me-dot, 20px); height:var(--me-dot, 20px); box-sizing:border-box; border-radius:50%; background:#1A7FE8; border:var(--me-ring, 2px) solid #fff;
+    box-shadow:0 1px 3px rgba(0,0,0,.35), 0 0 0 0 rgba(26,127,232,.45); animation:mebreath 2s ease-out infinite; }
+  @keyframes mebreath { from { box-shadow:0 1px 3px rgba(0,0,0,.35), 0 0 0 0 rgba(26,127,232,.45); } to { box-shadow:0 1px 3px rgba(0,0,0,.35), 0 0 0 var(--me-halo, 6px) rgba(26,127,232,0); } }
+  /* 함께 가기 주행 화면의 내 위치 = 표식 자체가 화살촉 하나(내비 주행 커서처럼): 파란 화살촉(뒤가 파인 삼각형) + 흰 테두리 3.5 + 옅은 그림자. 원·점·후광 없음. 진행 방향으로 돌린다.
+     폭 40 · 높이 46 — 굵은 노선(12 + 테두리 = 17) 위에서도 묻히지 않는 크기(11-13 사용자 "주행모드일때는 화살표 모양으로") */
+  /* 11-14 저녁(사용자 "마커 이런식으로 바꿔" — 그림): 주행 표식 = 파란 동그라미(꽉 찬 색) + 흰 테두리(지름의 약 9 %) + 옅은 그림자, 그 안에 흰 화살촉(뒤가 V 자로 파임, 지름의 58 %)이
+     진행 방향으로 돈다(동그라미는 돌지 않는다). 지름 46u(노선 17u 의 약 2.7배) — 처음엔 24u 였는데 "여기 마커 크기가 너무 작고"(11-14 16:38) · "아직도 마커 크기가 작다"(16:58)로 2배. 첫 화면 점은 26u(후광 퍼짐 9u) — 36u 로 키웠다가 "길벗 내 위치 마커가 너무 큼"(11-14 19:06)으로 줄였다: 낮의 "너무 크다"(32)와 "작다"(22) 사이. 주행 표식만 크게 둔다. 그 26u 도 "이거 크기 너무 크다 마커"(11-14 20:45, 첫 화면 캡처)로 다시 줄였다: 점 20u · 흰 테 2u · 후광 퍼짐 6u(전체 지름 44u → 32u). 그림은 직접 그린 SVG */
+  .mecur { width:var(--me-cur-box, 30px); height:var(--me-cur-box, 30px); display:flex; align-items:center; justify-content:center; pointer-events:none; }
+  .mecur b { width:var(--me-cur, 46px); height:var(--me-cur, 46px); box-sizing:border-box; border-radius:50%; background:#1A7FE8; border:var(--me-cur-ring, 4.2px) solid #fff; box-shadow:0 2px 5px rgba(0,0,0,.4); display:flex; align-items:center; justify-content:center; }
+  .mecur svg { width:var(--me-arrow, 14px); height:var(--me-arrow, 14px); display:block; flex:none; }
+  /* [내 위치] — 손으로 지도를 옮겨 따라가기가 멈췄을 때만. 앱의 유리 알약 문법(어두운 반투명 + 흰 글·그림), 보이는 높이 60 · 닿는 높이 96, 오른쪽 아래 [응급] 알약 위 */
+  #recenter { position:fixed; right:36px; bottom:121px; width:auto; min-height:0; height:96px; margin:0; padding:0; border:0; background:none; z-index:2000; display:flex; align-items:center; transition:none; -webkit-tap-highlight-color:transparent; }   /* 기본 button(폭 100%·위 여백) 덮어쓰기 */
+  #recenter[hidden] { display:none; }
+  /* 확대·축소 게이지(11-14 사용자 "확대 축소 게이지도 만들어줘"): 오른쪽 [내 위치] 자리 위에 세로로 [+] · 지금 줌 눈금 · [−]. 앱의 유리 알약 문법(어두운 반투명·흰 기호).
+     닿는 자리는 [+]·[−] 각 96 × 96, 보이는 알약 폭 60u·눈금 높이 150u(u = 지도 짧은 변 비례, applyMapU). transform 은 쓰지 않는다(에뮬 WebView 가 WebGL 위 합성 층을 못 그렸다) */
+  /* 실제 위치를 아직 못 받았을 때(11-14 오후): 지도 오른쪽 위 유리 알약 한 줄 — 점은 찍지 않는다 */
+  /* 실제 위치 모드에서 함께 가기가 시연 구간으로 옮겨 갔을 때(11-14): 같은 자리 같은 알약에 "시연 구간 · 경부고속도로 하행" — 지도가 실제 위치가 아님을 읽히게 */
+  #herewait, #demonote { position:fixed; right:36px; top:24px; z-index:2000; padding:14px 22px; border-radius:26px; background:rgba(28,30,34,.78); border:1px solid rgba(255,255,255,.14); color:#fff; font:600 20px/1 system-ui,-apple-system,"Malgun Gothic",sans-serif; pointer-events:none; }
+  #herewait[hidden], #demonote[hidden] { display:none; }
+  /* 11-14 밤(첫 화면 '최소 표시' 시안 C): 게이지는 평소 숨기고 지도를 만질 때만 나타났다가 3초 뒤 사라진다. 크기는 전의 70 %(알약 폭 42u·눈금 105u·닿는 자리 80).
+     나타나고 사라지는 것은 진하기를 몇 단계로 바꾼다(JS) — CSS 전환·애니메이션은 에뮬 WebView 가 WebGL 위에서 못 그린 적이 있다 */
+  #zoomg { position:fixed; right:36px; bottom:233px; z-index:2000; width:var(--zg-hit, 80px); display:flex; flex-direction:column; align-items:center; pointer-events:none; }
+  #zoomg[hidden] { display:none; }
+  #zoomg::before { content:''; position:absolute; top:calc((var(--zg-hit, 80px) - var(--zg-w, 42px)) / 2); bottom:calc((var(--zg-hit, 80px) - var(--zg-w, 42px)) / 2); left:calc((var(--zg-hit, 80px) - var(--zg-w, 42px)) / 2); width:var(--zg-w, 42px); box-sizing:border-box;
+    border-radius:calc(var(--zg-w, 42px) / 2); background:rgba(28,30,34,.78); border:1px solid rgba(255,255,255,.14); box-shadow:0 6px 18px rgba(0,0,0,.28); }
+  #zoomg button { position:relative; display:block; width:var(--zg-hit, 80px); height:var(--zg-hit, 80px); min-height:0; margin:0; padding:0; border:0; border-radius:0; background:none; color:#fff; pointer-events:auto;
+    font:500 var(--zg-font, 28px)/1 system-ui,-apple-system,"Malgun Gothic",sans-serif; transition:none; -webkit-tap-highlight-color:transparent; }
+  #zoomg button:active span { opacity:.55; }
+  #zoomg button.end span { opacity:.32; }   /* 끝값: 눌러도 아무 일 없다 */
+  #zoomg .ztrack { position:relative; width:var(--zg-hit, 80px); height:var(--zg-track, 105px); margin:calc((var(--zg-hit, 80px) - var(--zg-w, 42px)) / -2) 0; }
+  #zoomg .ztrack::before { content:''; position:absolute; left:calc(var(--zg-hit, 80px) / 2 - 1px); width:2px; top:0; bottom:0; background:rgba(255,255,255,.35); }
+  #zoomg .ztrack b { position:absolute; left:calc(var(--zg-hit, 80px) / 2 - 5px); width:10px; height:2px; background:rgba(255,255,255,.55); }   /* 기본 줌 자리 표시 */
+  #zoomg .ztrack i { position:absolute; left:calc(var(--zg-hit, 80px) / 2 - var(--zg-knob, 13px) / 2); width:var(--zg-knob, 13px); height:var(--zg-knob, 13px); border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.4); }
+  #recenter span { display:flex; align-items:center; gap:10px; height:60px; padding:0 24px 0 18px; border-radius:30px; background:rgba(28,30,34,.78); border:1px solid rgba(255,255,255,.14);
+    box-shadow:0 6px 18px rgba(0,0,0,.28); color:#fff; font:600 21px/1 system-ui,-apple-system,"Malgun Gothic",sans-serif; }
+  #recenter svg { width:26px; height:26px; }
+  /* 목적지 깃발(11-14): 짙은 원 + 흰 깃발, 흰 테두리 — 실제 장소 좌표에 */
+  .destpin { width:40px; height:40px; box-sizing:border-box; border-radius:50%; background:#1C1E22; border:3px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; pointer-events:none; }
+  .destpin svg { width:22px; height:22px; color:#fff; }
   body.car .tag { font-size:20px; padding:3px 8px; } body.car .carpin { width:44px; height:44px; } body.car .carpin svg { width:30px; height:30px; }
   body.car .rest { width:32px; height:32px; } body.car .rest svg { width:22px; height:22px; }
   .leaflet-control-attribution { font-size:11px; }
@@ -108,8 +164,15 @@
   <div id="alerts"></div>
   <div id="map"></div>
   <div id="panel"></div>
+  <button id="recenter" type="button" hidden><span><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2.2" fill="#fff" stroke="none"/><path d="M12 1.8v3.4M12 18.8v3.4M1.8 12h3.4M18.8 12h3.4"/></svg><b id="recenterText"></b></span></button>
+  <div id="zoomg" hidden><button id="zin" type="button"><span>+</span></button><div class="ztrack"><b></b><i></i></div><button id="zout" type="button"><span>−</span></button></div>
+  <div id="herewait" hidden></div>
+  <div id="demonote" hidden></div>
 </div>
 <script>
+// 지도 뜨는 시간 재기: 단계마다 한 줄(앱의 시연·디버그 빌드만 logcat 으로 옮긴다 — 제품 빌드는 콘솔을 읽지 않는다)
+const mapt = stage => console.info(`[MAPT] ${stage} ${Date.now()}`);
+mapt('html');
 /* MAPAPI:BEGIN — 지도 어댑터(rider.html 과 link/link.html 에 같은 코드: 앱은 목록에 적은 자산만 싣기 때문에 공용 JS 파일을 못 쓴다) */
 // TMAP 앱키가 빌드에 들어오면(app/build.gradle.kts 가 __TMAP_KEY__ 자리를 local.properties 의 tmap.appKey 로 바꾼다) TMAP Vector JS(Tmapv3) 순정 지도 + 공식 NIGHT 테마로,
 // 키가 없으면 지금처럼 Leaflet + OpenFreeMap 벡터 바탕으로 그린다. 그리는 코드는 MapApi 하나만 부른다(좌표는 어디서나 Leaflet 처럼 [위도, 경도])
@@ -185,6 +248,10 @@ function leafletApi() {
     size: () => M.getSize(),
     invalidate() { M.invalidateSize(false); },
     getZoom: () => M.getZoom(),
+    setZoom(z) { M.setZoom(z, {animate: false}); },
+    setCenter(ll) { M.panTo(ll, {animate: false}); },
+    jump(ll, z) { M.setView(ll, z, {animate: false}); },
+    getCenter() { const c = M.getCenter(); return [c.lat, c.lng]; },
     setView(ll, z) { M.setView(ll, z); },
     inView: (ll, pad = 0) => M.getBounds().pad(pad).contains(ll),   // pad<0 = 가장자리 안쪽
     on(evt, cb) { M.on(evt, evt === 'click' ? e => cb([e.latlng.lat, e.latlng.lng]) : () => cb()); },   // click · zoomend · moveend
@@ -218,12 +285,12 @@ function leafletApi() {
     circle(o) {
       const c = L.circle(o.latlng, { radius: o.radius, color: o.color, weight: o.weight ?? 2, opacity: o.opacity ?? 1, fillColor: o.fillColor || o.color, fillOpacity: o.fillOpacity, dashArray: o.dash || null }).addTo(M);
       if (o.tip) c.bindTooltip(o.tip);
-      return { remove: () => c.remove() };
+      return { set(ll, r) { c.setLatLng(ll); c.setRadius(r); }, show(on) { c.setStyle({ opacity: on ? (o.opacity ?? 1) : 0, fillOpacity: on ? (o.fillOpacity ?? 0.2) : 0 }); }, remove: () => c.remove() };
     },
     // 화면 크기(px) 고정 점(L.circleMarker)
     dot(o) {
       const c = L.circleMarker(o.latlng, { radius: o.radius, color: o.color, weight: o.weight, fillColor: o.fillColor, fillOpacity: o.fillOpacity ?? 1, interactive: false }).addTo(M);
-      return { remove: () => c.remove() };
+      return { setLatLng: ll => c.setLatLng(ll), remove: () => c.remove() };
     },
     group: mapGroup,
     // 타일 없이 도로 선만으로 그린 바탕(Leaflet 만): 타일(200) 위, 경로·표시(400) 아래 칸에
@@ -245,14 +312,14 @@ function leafletApi() {
 // 쓰는 확장은 OES_vertex_array_object(WebGL2 기본 기능으로 잇는다)·WEBGL_lose_context 둘뿐이다. 실차처럼 WebGL1 이 되면 아무것도 바꾸지 않는다
 function webgl1OnWebgl2() {
   const proto = HTMLCanvasElement.prototype;
-  if (proto.__tagoGl1) return; proto.__tagoGl1 = true;
+  if (proto.__mapGl1) return; proto.__mapGl1 = true;
   const orig = proto.getContext;
   proto.getContext = function (type, attrs) {
     const ctx = orig.call(this, type, attrs);
     if (ctx || (type !== 'webgl' && type !== 'experimental-webgl')) return ctx;
     const gl = orig.call(this, 'webgl2', attrs);
-    if (!gl || gl.__tagoGl1) return gl;
-    gl.__tagoGl1 = true;
+    if (!gl || gl.__mapGl1) return gl;
+    gl.__mapGl1 = true;
     const ext = gl.getExtension.bind(gl);
     gl.getExtension = name => name !== 'OES_vertex_array_object' ? ext(name) : {
       VERTEX_ARRAY_BINDING_OES: gl.VERTEX_ARRAY_BINDING,
@@ -284,17 +351,90 @@ async function tmapTidy(map, car) {
 }
 
 function tmapApi() {
-  let map = null, el = null, loaded = false, dark = false, car = false;
+  let map = null, el = null, loaded = false, dark = false, car = false, camBroken = false;
+  const cam = () => { if (camBroken || !map || !loaded) return null; try { const c = map.vsmMap && map.vsmMap().getCamera(); return c && c.jumpTo && c.getZoom ? c : null; } catch (e) { camBroken = true; return null; } };
   const TZ = z => z - 1;   // Leaflet 줌 → TMAP 줌(GL 512px 타일이라 한 단계 가깝다). 어댑터 밖은 모두 Leaflet 줌으로 쓴다
   const waiting = [], styleWait = [], shapes = new Set(), handlers = { click: [], zoomend: [], moveend: [] };
   const LL = ll => new Tmapv3.LatLng(ll[0], ll[1]);
   const val = (p, k) => typeof p[k] === 'function' ? p[k]() : p[k] ?? p['_' + k];   // LatLng.lat() 은 메서드, 이벤트의 lngLat 은 속성(_lat)
   // 테마를 바꾼 뒤 새 스타일이 다 받아질 때까지(StyleLoad, 안 오면 1.5초) 기다린다
   const styleSettled = () => new Promise(r => { let done = false; const fin = () => { if (!done) { done = true; r(); } }; styleWait.push(fin); setTimeout(fin, 1500); });
+  // 겹쳐 긋는 선(차 화면의 노선·구역 선, 11-14 밤 — line 에 over: true): 지도 캔버스 바로 위(표식 아래)에 2D 캔버스를 하나 깔고, 엔진 카메라로 화면 좌표를 구해(vsmMap().project — 공개 문서 밖) 직접 긋는다.
+  // 까닭: 엔진의 선 층은 좌표를 바꿀 때마다 타일을 다시 만드는데, 기기가 바쁘면 다 만든 직후 한두 장 동안 그 선을 그리지 않고(테와 윗선은 따로 도는 층이라 파란 윗선만 빠져 어두운 테만 보이기도 한다),
+  // 줌 단계가 바뀔 때는 좌표를 안 바꿔도 0.1~1초 통째로 사라진다(에뮬레이터 4막 녹화 한 벌에 일곱 번, PC 를 6배 느리게 해서 재현). 직접 그으면 다시 만드는 것이 없어 비는 장이 없고, 걸음마다 내 자리부터 그을 수 있다.
+  // 달라지는 것: 지도 글자(도로 이름 등)와 위험 고리가 선 위가 아니라 아래에 온다. 안 되면(project 없음 등) 예전처럼 엔진 선으로 그린다. 끄려면 CARMAP.overLines = false
+  const over = { cv: null, ctx: null, lines: [], sig: '', dirty: true, raf: 0, ok: null };
+  const overReady = () => {
+    if (over.ok !== null) return over.ok;
+    try {
+      const vm = map.vsmMap(), gl = vm.getCanvas(), t = vm.project([127, 37.5]);
+      if (!gl || !gl.parentNode || !t || !Number.isFinite(t.x) || !Number.isFinite(t.y)) throw 0;
+      const cv = document.createElement('canvas'); cv.className = 'routeover'; cv.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none';
+      gl.after(cv); over.cv = cv; over.ctx = cv.getContext('2d'); over.ok = !!over.ctx;
+    } catch (e) { over.ok = false; }
+    return over.ok;
+  };
+  const overDraw = force => {
+    if (!over.ok || !loaded) return;
+    const vm = map.vsmMap(), gl = vm.getCanvas(), w = gl.clientWidth, h = gl.clientHeight, dpr = window.devicePixelRatio || 1;
+    const a = vm.project([127, 37.5]), b = vm.project([127.01, 37.51]);   // 카메라·크기가 그대로이고 선도 안 바뀌었으면 다시 긋지 않는다
+    const sig = `${w}x${h}@${dpr}|${a.x.toFixed(2)},${a.y.toFixed(2)},${b.x.toFixed(2)},${b.y.toFixed(2)}`;
+    if (!force && !over.dirty && sig === over.sig) return;
+    over.sig = sig; over.dirty = false;
+    const cv = over.cv, ctx = over.ctx;
+    if (!cv.isConnected) gl.after(cv);
+    // 캔버스는 화면 전체가 아니라 선이 화면에서 지나는 둘레(64 px 칸에 맞춘 네모)만큼만 둔다. 화면 전체 크기로 두었더니 걸음마다 다시 올리는 그림이 커서
+    // 에뮬레이터에서 지도 갱신이 초당 13 → 9.7번으로 떨어졌다(11-15 앱 개발 세션 4막 v19c ↔ v19d). 주행 중에는 표식이 화면 한자리에 있어 둘레가 거의 그대로다
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; const paths = [];
+    for (const L of over.lines) {
+      const pts = L.pts(); if (pts.length < 2) continue;
+      const m = (L.o.casing ? L.o.casing.weight : L.o.weight) / 2 + 2, q = pts.map(pt => vm.project([pt[1], pt[0]]));
+      for (let i = 1; i < q.length; i++) {   // 토막마다: 화면에 걸치는 것만 둘레에 넣는다
+        const ax = Math.min(q[i - 1].x, q[i].x) - m, bx = Math.max(q[i - 1].x, q[i].x) + m, ay = Math.min(q[i - 1].y, q[i].y) - m, by = Math.max(q[i - 1].y, q[i].y) + m;
+        if (bx < 0 || by < 0 || ax > w || ay > h) continue;
+        x0 = Math.min(x0, Math.max(0, ax)); y0 = Math.min(y0, Math.max(0, ay)); x1 = Math.max(x1, Math.min(w, bx)); y1 = Math.max(y1, Math.min(h, by));
+      }
+      paths.push([L, q]);
+    }
+    if (!(x1 > x0 && y1 > y0)) { if (cv.style.display !== 'none') cv.style.display = 'none'; return; }   // 화면에 걸치는 선이 없다
+    const G = 64; x0 = Math.floor(x0 / G) * G; y0 = Math.floor(y0 / G) * G; x1 = Math.ceil(x1 / G) * G; y1 = Math.ceil(y1 / G) * G;
+    const cw = Math.round((x1 - x0) * dpr), ch = Math.round((y1 - y0) * dpr);
+    if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; cv.style.width = (x1 - x0) + 'px'; cv.style.height = (y1 - y0) + 'px'; }
+    if (over.x0 !== x0 || over.y0 !== y0) { over.x0 = x0; over.y0 = y0; cv.style.left = x0 + 'px'; cv.style.top = y0 + 'px'; }
+    if (cv.style.display === 'none') cv.style.display = '';
+    ctx.setTransform(dpr, 0, 0, dpr, -x0 * dpr, -y0 * dpr); ctx.clearRect(x0, y0, x1 - x0, y1 - y0); ctx.lineJoin = 'round';
+    for (const [L, q] of paths) {
+      ctx.beginPath();
+      for (let i = 0; i < q.length; i++) { if (i) ctx.lineTo(q[i].x, q[i].y); else ctx.moveTo(q[i].x, q[i].y); }
+      for (const x of L.o.casing ? [L.o.casing, L.o] : [L.o]) {   // 테(더 굵은 선)를 먼저, 그 위에 윗선 — 엔진 선과 같은 순서
+        const dash = x === L.o && L.o.dash;
+        ctx.strokeStyle = x.color; ctx.lineWidth = x.weight; ctx.globalAlpha = x.opacity ?? 1;
+        ctx.setLineDash(dash ? [x.weight * 3, x.weight * 0.9, x.weight, x.weight * 0.9] : []); ctx.lineCap = 'butt';   // 선 끝은 엔진 선처럼 곧게. 점선: 엔진 'dash' 와 같은 무늬(긴 토막·짧은 토막 — 화면에서 잰 값)
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1; ctx.setLineDash([]);
+  };
+  const overTick = () => { over.raf = requestAnimationFrame(overTick); try { overDraw(false); } catch (e) {} };   // 손으로 옮기기·줌 단추처럼 주행 걸음 밖에서 지도가 움직일 때를 따라간다
+  const overLine = o => {
+    let lls = o.latlngs || [], head = null, from = 0;
+    const L = { o, pts: () => head ? [head, ...lls.slice(from)] : lls };
+    over.lines.push(L); over.dirty = true; if (!over.raf) overTick();
+    return {
+      over: true,
+      setLatLngs(v) { lls = v; head = null; from = 0; over.dirty = true; },
+      trim(here, i0) { head = here; from = i0; over.dirty = true; },   // 내 자리(here)에서 시작하고, 그 뒤는 원래 점 i0 번째부터(지나온 쪽은 긋지 않는다)
+      remove() {
+        const k = over.lines.indexOf(L); if (k >= 0) over.lines.splice(k, 1);
+        over.dirty = true;
+        if (!over.lines.length) { cancelAnimationFrame(over.raf); over.raf = 0; try { overDraw(true); } catch (e) {} }
+      },
+    };
+  };
   // 벡터 도형(선·원)은 GL 레이어라 setMapType 의 스타일 재적재에 지워질 수 있다 → 도형마다 build/kill 을 두고 테마를 바꾼 뒤 다시 만든다
   const shape = build => {
     const parts = [];
-    const S = { build() { S.kill(); build(parts); }, kill() { parts.splice(0).forEach(p => p.setMap(null)); } };
+    const S = { parts, build() { S.kill(); build(parts); }, kill() { parts.splice(0).forEach(p => p.setMap(null)); } };
     shapes.add(S); if (loaded) S.build();
     return S;
   };
@@ -315,7 +455,7 @@ function tmapApi() {
         s.onerror = () => { document.write = dw; rej(new Error('TMAP 스크립트')); };
         document.head.appendChild(s);
         const t0 = Date.now(), poll = setInterval(() => {
-          if (window.Tmapv3 && Tmapv3.Map) { clearInterval(poll); document.write = dw; res(); }
+          if (window.Tmapv3 && Tmapv3.Map) { clearInterval(poll); document.write = dw; mapt('tmap-script'); res(); }
           else if (Date.now() - t0 > 15000) { clearInterval(poll); document.write = dw; rej(new Error('TMAP 시간 초과')); }
         }, 50);
       });
@@ -324,7 +464,13 @@ function tmapApi() {
       el = document.getElementById(elId); dark = !!o.dark; car = !!o.car;
       // 크기는 #map 의 CSS(차 화면은 JS 로 넣은 px)를 그대로 쓴다. mapType 옵션은 생성자에서 무시돼 ConfigLoad 에서 setMapType 으로 건다
       map = new Tmapv3.Map(el, { center: LL(o.center || [37.56668, 126.978433]), zoom: TZ(o.zoom || 15), naviControl: false, scaleBar: false });
+      // 지도 불러오는 중 안내: 타일이 실제로 그려졌다는 SDK 신호 'RenderComplete'(첫 번째)로만 걷는다 — ConfigLoad 는 타일보다 수 초 먼저 와서 회색 워터마크 판이 보인다(실측 11-10).
+      // 30 초가 지나도 안 오면 '불러오지 못했습니다' 로 바꾼다(조용히 두지 않음, 나중에 오면 걷힌다)
+      const ov = document.createElement('div'); ov.id = 'maploading'; ov.textContent = T('지도를 불러오는 중입니다', 'Loading the map…'); el.appendChild(ov);
+      const loadFail = setTimeout(() => { ov.textContent = T('지도를 불러오지 못했습니다. 인터넷 연결을 확인하고 앱을 다시 여세요.', 'Could not load the map. Check the internet connection and reopen the app.'); console.warn('TMAP 지도 30초 안에 준비되지 않음'); }, 30000);
+      map.on('RenderComplete', () => { if (ov.isConnected) { clearTimeout(loadFail); ov.remove(); mapt('first-render'); } });
       map.on('ConfigLoad', async () => {
+        mapt('map-config');
         if (dark) { map.setMapType('NIGHT'); await styleSettled(); }
         await tmapTidy(map, car);
         loaded = true;
@@ -338,6 +484,8 @@ function tmapApi() {
       return api;
     },
     ready(cb) { if (loaded) cb(); else waiting.push(cb); },
+    restyle() { if (loaded) shapes.forEach(S => S.build()); over.dirty = true; },
+    overSync() { try { overDraw(false); } catch (e) {} },   // 겹쳐 긋는 선을 지금 지도 상태로 바로 다시 긋는다(주행 걸음 끝에 — 표식과 같은 때에 움직이게)   // 선 옵션(굵기)을 바꾼 뒤 다시 그린다(화면 크기 비례, 11-14)
     // 순정 야간 = 공식 NIGHT 테마. 스타일을 다시 받은 뒤 선·원을 다시 만든다(마커는 DOM 이라 남는다)
     async setDark(d) {
       dark = !!d;
@@ -351,17 +499,32 @@ function tmapApi() {
       if (!lls.length || !map) return;
       const [sw, ne] = geoBox(lls, o.pad || 0);
       if (sw[0] === ne[0] && sw[1] === ne[1]) { map.setCenter(LL(sw)); map.setZoom(TZ(o.maxZoom || 17)); return; }   // 점 하나: Leaflet 처럼 maxZoom 으로
+      // 줌 상한(maxZoom)에 걸리는 맞춤은 가운데·줌을 바로 넣는다. 예전엔 fitBounds 를 부른 직후 줌을 줄였는데, 그 줄이기가 맞춤 이동을 끊어 지도가 기본 자리(서울 시청)에 남을 때가 있었다
+      // (11-14 저녁 PC 휴대폰 화면: 점들이 3 km 안에 모였을 때 열 번에 몇 번)
+      if (o.maxZoom != null) {
+        const t = fitTarget([sw, ne], o);
+        if (t.z >= o.maxZoom - 1e-6) { map.setCenter(LL(t.c)); map.setZoom(TZ(o.maxZoom)); return; }
+      }
       map.fitBounds(new Tmapv3.LatLngBounds(LL(sw), LL(ne)), { top: o.top || 0, right: o.right || 0, bottom: o.bottom || 0, left: o.left || 0 });
-      if (o.maxZoom != null) {   // fitBounds 에 maxZoom 이 없어 맞춘 뒤 줄인다(움직임이 끝난 뒤 한 번 더)
+      if (o.maxZoom != null) {   // 상한에 안 걸리는 경우의 안전망: 움직임이 끝난 뒤 한 번 확인
         const clamp = () => { if (map.getZoom() > TZ(o.maxZoom)) map.setZoom(TZ(o.maxZoom)); };
-        clamp();
         const once = () => { handlers.moveend.splice(handlers.moveend.indexOf(once), 1); clamp(); };
         handlers.moveend.push(once);
       }
     },
     size: () => ({ x: el ? el.offsetWidth : 0, y: el ? el.offsetHeight : 0 }),
     invalidate() { if (map) map.resize(); },
-    getZoom: () => map.getZoom() + 1,
+    // 줌: 공개 API(map.setZoom/getZoom)는 정수 줌만 받는다(15.5 → 15) — 부드러운 따라가기에서 두 점 맞춤으로 들어갈 때 줌이 한 번에 한 단계 뛰어 표식이 220 px 넘게 튀었다(11-14 PC 측정).
+    // 엔진 카메라(vsmMap().getCamera(), 공개 문서 밖 — tmapTidy 와 같은 엔진)는 소수 줌·가운데를 한 번에 받는다(jumpTo). 없거나 실패하면 공개 API 로 돌아간다
+    getZoom() { const c = cam(); return (c ? c.getZoom() : map.getZoom()) + 1; },
+    setZoom(z) { const c = cam(); if (c) c.setZoom(TZ(z)); else map.setZoom(TZ(Math.round(z))); },
+    setCenter(ll) { map.setCenter(LL(ll)); },
+    jump(ll, z) {   // 가운데 + 줌을 한 번에(움직임 없이) — 따라가기가 화면 갱신마다 부른다
+      const c = cam();
+      if (c) { try { c.jumpTo({ center: [ll[1], ll[0]], zoom: TZ(z) }); return; } catch (e) { camBroken = true; } }
+      map.setCenter(LL(ll)); if (Math.round(z) !== map.getZoom() + 1) map.setZoom(TZ(Math.round(z)));
+    },
+    getCenter() { const c = map.getCenter(); return [val(c, 'lat'), val(c, 'lng')]; },
     setView(ll, z) { map.setCenter(LL(ll)); map.setZoom(TZ(z)); },
     inView(ll, pad = 0) {
       const b = map.getBounds(), sw = b.getSouthWest(), ne = b.getNorthEast();
@@ -387,6 +550,7 @@ function tmapApi() {
     },
     // 선: TMAP 은 테(outline)를 그리지 않아 더 굵은 선을 먼저 깐다. 점선은 strokeStyle "dash". 기본 불투명도 0.7 이라 늘 적어 준다
     line(o) {
+      if (o.over && loaded && overReady()) return overLine(o);
       let lls = o.latlngs || [], key = JSON.stringify(lls);
       const S = shape(parts => {
         if (lls.length < 2) return;
@@ -394,21 +558,33 @@ function tmapApi() {
           parts.push(new Tmapv3.Polyline({ path: lls.map(LL), strokeColor: x.color, strokeWeight: x.weight, strokeOpacity: x.opacity ?? 1, strokeStyle: x === o && o.dash ? 'dash' : 'solid', map }));
       });
       return {
-        setLatLngs(v) { const k = JSON.stringify(v); if (k === key) return; key = k; lls = v; if (loaded) S.build(); },   // 같은 좌표면 다시 만들지 않는다(휴대폰은 1초마다 부른다)
+        // 같은 좌표면 다시 만들지 않는다(휴대폰은 1초마다 부른다). 도형이 이미 있으면 새로 만들지 않고 좌표만 바꾼다(setPath — 11-14 부드러운 지도: 자주 다시 만들면 TMAP 이 버벅였다)
+        setLatLngs(v) {
+          const k = JSON.stringify(v); if (k === key) return; key = k; lls = v;
+          if (!loaded) return;
+          if (S.parts.length && lls.length >= 2 && S.parts.every(q => q.setPath)) { const path = lls.map(LL); S.parts.forEach(q => q.setPath(path)); }
+          else S.build();
+        },
         remove() { S.kill(); shapes.delete(S); },
       };
     },
     circle(o) {
       const S = shape(parts => parts.push(new Tmapv3.Circle({ center: LL(o.latlng), radius: o.radius, strokeColor: o.color, strokeWeight: o.weight ?? 2, strokeOpacity: o.opacity ?? 1,
         fillColor: o.fillColor || o.color, fillOpacity: o.fillOpacity ?? 0.2, map })));
-      return { remove() { S.kill(); shapes.delete(S); } };
+      // set·show: 원을 다시 만들지 않고 자리·반경·보이기만 바꾼다 — 새로 만들 때마다 에뮬레이터에서 화면이 0.3~0.45초 멈췄다(11-14 [MAPT] ringMax)
+      const one = () => S.parts[0];
+      return {
+        set(ll, r) { o = { ...o, latlng: ll, radius: r }; const c = one(); if (c && c.setCenter && c.setRadius) { c.setCenter(LL(ll)); c.setRadius(r); } else if (loaded) S.build(); },
+        show(on) { const c = one(); if (c && c.setVisible) c.setVisible(!!on); },
+        remove() { S.kill(); shapes.delete(S); },
+      };
     },
     // 화면 크기 고정 점 = 작은 iconHTML 마커(테 두께까지 L.circleMarker 와 같은 지름)
     dot(o) {
       const d = 2 * o.radius + (o.weight || 0);
       const m = new Tmapv3.Marker({ position: LL(o.latlng), iconHTML: `<div style="width:${d}px;height:${d}px;box-sizing:border-box;border-radius:50%;background:${o.fillColor};border:${o.weight || 0}px solid ${o.color};opacity:${o.fillOpacity ?? 1}"></div>`,
         iconSize: new Tmapv3.Size(d, d), anchor: 'center', zIndex: 90, map });
-      return { remove: () => m.setMap(null) };
+      return { setLatLng: ll => m.setPosition(LL(ll)), remove: () => m.setMap(null) };
     },
     group: mapGroup,
     offlineBase() {},   // TMAP 은 자기 타일만 쓴다
@@ -452,12 +628,159 @@ const ICONS = {
 };
 const ICON_COLORS = {academy: '#7C3AED', adult: '#2563EB', cafe: '#B66A32', car: '#334155', cctv: '#64748B', check: '#536B62', child: '#2563EB', close: '#536B62', convenience: '#D97706', flag: '#536B62', medical: '#E5484D', message: '#536B62', mic: '#536B62', moon: '#6366F1', navigation: '#536B62', parking: '#0891B2', people: '#536B62', pharmacy: '#E5484D', pin: '#059669', rain: '#0284C7', senior: '#2563EB', subway: '#0891B2', timer: '#536B62', walk: '#536B62'};
 /* ICONS:END */
-const qs = new URLSearchParams(location.search);
-const GID = location.pathname.split('/').filter(Boolean)[1] || 'road';   // 'road' = 도로 링크만(그룹 없음)
+let qs = new URLSearchParams(location.search);   // let: 제자리 전환(linkGo)이 바꾼다
+let GID = location.pathname.split('/').filter(Boolean)[1] || 'road';   // 'road' = 도로 링크만(그룹 없음)
 const VIEW = me => GID === 'road' ? `/api/road?me=${encodeURIComponent(me)}` : `/api/link/${GID}?me=${encodeURIComponent(me)}`;
 const CAR = qs.get('car') === '1';
-const PREVIEW = qs.get('preview') === '1';   // 차 앱 대기 화면: 경로·휴게소·사고 다발 구간만 그리고 폴링하지 않는다
-let ME = PREVIEW ? '' : qs.get('me') || localStorage.getItem('tago_me_' + GID) || '';
+let PREVIEW = qs.get('preview') === '1';   // 차 앱 대기 화면: 경로·휴게소·사고 다발 구간만 그리고 폴링하지 않는다
+// padw(11-14 밤, 선택): 왼쪽 위 판이 실제로 가리는 폭(기기 화소). 첫 화면 '최소 표시'처럼 판이 작아지면 앱이 이 값만 바꿔 넘긴다 — 없으면 padl. padl 은 그대로 640 dp × density(화면 밀도를 재는 데도 쓴다)
+const padCss = q => CAR ? Math.max(0, +(q.get('padw') ?? q.get('padl')) || 0) / (window.devicePixelRatio || 1) : 0;
+let PADL = padCss(qs);   // 앱이 기기 화소로 넘긴다 → CSS px
+// 차 화면 지도 모습(11-13): 노선 굵기 12 + 테두리 양쪽 2.5, 주행 중엔 내 표식 앞쪽 노선만(11-14 — 지나온 구간은 그리지 않는다), 내 위치 점 + 진행 방향 화살표, 따라가기(내 차 ~ 앞 2 km 를 판 오른쪽 빈 곳에, 최대 줌 16).
+// 노선 색은 두 안 — stock: 순정 노선처럼 밝은 파랑 + 진한 남색 테두리 / ink: 중립 짙은 색 + 흰 테두리(밤은 밝은 회색 + 검은 테두리). ?route=ink 로 고른다(기본 stock)
+const ROUTE_LOOK = CAR && qs.get('route') === 'ink' ? 'ink' : 'stock';
+// 첫 화면(preview)의 내 위치: 앱이 넘긴 경로 위 자리(m, 시연 출발점). 없으면 표식을 그리지 않고 경로 전체를 보인다(지어내지 않는다)
+let START_S = PREVIEW && qs.get('s') != null && qs.get('s') !== '' ? +qs.get('s') : NaN;
+const CARMAP = { overLines: true, width: 12, edge: 2.5, zoom: 15, driveZoom: 15, aheadFrac: 0.17, maxZoom: 16, focusPad: {top: 140, right: 140, bottom: 200, extraLeft: 100}, focusNearM: 2500, focusMinM: 800, pauseMs: 8000, passedStepM: 200 };   // 차 앱 지도 우선 화면: 왼쪽 위 떠 있는 판 폭(px)만큼 지도를 오른쪽으로 비켜 맞춘다
+// 차 화면 크기 비례(11-14): 지도 짧은 변(CSS px) ÷ 1000 = u, 0.55~1.25 로 묶는다. 노선 굵기·내 위치 점·후광·주행 화살촉이 같은 u 를 쓴다 —
+// 전체 화면·순정 내비와 나눈 화면·좁은 분할에서 같은 비례. 노선 굵기·표식은 둘 다 CSS px 라 WebView dpr(에뮬 1.375)이 같은 배수로 곱해져 비례는 그대로다
+const MAPSCALE = { ref: 1000, min: 0.55, max: 1.25, base: { width: 12, edge: 2.5, dot: 20, ring: 2, halo: 6, cur: 46, curRing: 4.2, curPad: 10, arrow: 0.58, zone: 8 } };   // cur = 주행 표식 동그라미 지름, curPad = 그림자 자리, arrow = 화살촉 ÷ 지름
+let mapU = 1;
+const scaledLines = [];   // 차 화면 노선들: { o: 선 옵션, base, caseBase } — 크기가 바뀌면 굵기를 다시 넣고 다시 그린다
+// 기준은 지도 칸이 아니라 화면 전체의 짧은 변(11-14 저녁): 주행 중 앱이 왼쪽에 판을 놓아 지도 칸 폭이 좁아져도(1223 → 약 800 CSS px) 표식·노선이 따라 줄면 안 된다
+// (사용자 말은 "화면 크기에 비례"). 페이지는 앱 창 크기를 모르므로, 이 페이지를 연 뒤 본 가장 큰 지도 칸(= 판이 없을 때의 전체 화면)을 화면으로 본다. 높이가 8 % 넘게 달라지면(다른 창 모드) 다시 잰다
+let mapMaxW = 0, mapMaxH = 0;
+function computeMapU() {
+  const el = document.getElementById('map'), w = el && el.clientWidth || innerWidth, h = el && el.clientHeight || innerHeight;
+  if (mapMaxH && Math.abs(h - mapMaxH) / mapMaxH > 0.08) { mapMaxW = 0; mapMaxH = 0; }
+  mapMaxW = Math.max(mapMaxW, w); mapMaxH = Math.max(mapMaxH, h);
+  return Math.min(MAPSCALE.max, Math.max(MAPSCALE.min, Math.min(mapMaxW, mapMaxH) / MAPSCALE.ref));
+}
+function applyMapU() {
+  if (!CAR) return false;
+  const u = computeMapU(), changed = Math.abs(u - mapU) / mapU > 0.08, b = MAPSCALE.base, r = document.documentElement.style, px = v => (Math.round(v * 2) / 2) + 'px';
+  mapU = u;
+  r.setProperty('--me-dot', px(b.dot * u)); r.setProperty('--me-ring', px(b.ring * u)); r.setProperty('--me-halo', px(b.halo * u));
+  r.setProperty('--me-box', px((b.dot + 2 * b.halo) * u)); r.setProperty('--me-cur', px(b.cur * u)); r.setProperty('--me-cur-ring', px(b.curRing * u)); r.setProperty('--me-cur-box', px((b.cur + b.curPad) * u)); r.setProperty('--me-arrow', px(b.cur * b.arrow * u));
+  const cl = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  r.setProperty('--zg-w', px(cl(42 * u, 34, 46))); r.setProperty('--zg-track', px(cl(105 * u, 68, 120))); r.setProperty('--zg-font', px(cl(28 * u, 22, 31))); r.setProperty('--zg-knob', px(cl(13 * u, 10, 14)));   // 11-14 밤: 전의 70 %
+  gaugeSync();
+  CARMAP.width = Math.round(b.width * u * 2) / 2; CARMAP.edge = Math.round(b.edge * u * 2) / 2;
+  if (changed && scaledLines.length) {
+    for (const L of scaledLines) { L.o.weight = Math.round(L.base * u * 2) / 2; if (L.o.casing) L.o.casing.weight = Math.round(L.caseBase * u * 2) / 2; }
+    if (MapApi.restyle) MapApi.restyle();
+  }
+  return changed;
+}
+const scaledLine = (o, base, caseBase) => { const ret = MapApi.line(o); scaledLines.push({ o, base, caseBase, ret }); return ret; };
+// 실제 위치 모드(11-14 오후, 사용자 "저게 맞는위치냐고"): 차 앱이 ?here=1 로 열면 첫 화면의 내 위치 = 기기의 실제 위치(/api/app/here, 2초마다).
+// 못 받으면 점 없이 "위치를 받는 중". 고른 목적지까지의 실제 경로(/api/app/myroute)를 그리고 그 경로 전체를 보인다. 시연 출발 자리에는 점을 찍지 않는다
+let HERE_ON = CAR && qs.get('here') === '1';   // let: 설정의 [내 실제 위치 쓰기]를 바꾸면 제자리 전환(linkGo)이 바꾼다
+let hereLL = null, herePuck = null, hereTimer = 0, myRouteKey = '', myRouteParts = [], routeView = false;
+// 여러 점이 다 보이는 가운데·줌(여백 px 은 위·오른쪽·아래·왼쪽 따로). 지도 어댑터의 fit 과 같은 뜻이지만 값을 돌려준다 — 미끄러져 가려고
+function fitTarget(lls, o = {}) {
+  const [sw, ne] = geoBox(lls), sz = MapApi.size(), cos = Math.cos((sw[0] + ne[0]) / 2 * Math.PI / 180);
+  const availW = Math.max(80, sz.x - (o.left || 0) - (o.right || 0)), availH = Math.max(80, sz.y - (o.top || 0) - (o.bottom || 0));
+  const mpp = Math.max((ne[0] - sw[0]) * 111320 / availH, (ne[1] - sw[1]) * 111320 * cos / availW, 0.01);
+  const z = Math.min(o.maxZoom ?? 18, Math.log2(156543.03 * cos / mpp)), m2 = 156543.03 * cos / Math.pow(2, z);
+  return { z, c: [(sw[0] + ne[0]) / 2 + ((o.top || 0) - (o.bottom || 0)) / 2 * m2 / 111320, (sw[1] + ne[1]) / 2 - ((o.left || 0) - (o.right || 0)) / 2 * m2 / (111320 * cos)] };
+}
+// 지도를 한 번에 옮기지 않고 ms 동안 미끄러져 간다(11-14: 목적지를 고른 직후 경로 전체로 한 번에 축소하면 새 타일이 올 때까지 지도가 회색으로 비었다 —
+// 조금씩 축소하면 이미 받은 타일이 가운데에 남은 채 가장자리부터 채워진다). 가운데는 보이는 폭이 커지는 만큼 옮긴다(줌 비례 — 처음에 휙 지나가지 않게). 손으로 지도를 만지면 멈춘다
+let camAnim = 0;
+function camStop() { if (camAnim) { cancelAnimationFrame(camAnim); camAnim = 0; } }
+function camTo(c, z, ms = 1400) {
+  camStop();
+  if (!MapApi.jump || !MapApi.getCenter) { MapApi.setView(c, z); return; }
+  const c0 = MapApi.getCenter(), z0 = MapApi.getZoom(), t0 = performance.now(), w0 = Math.pow(2, -z0), w1 = Math.pow(2, -z);
+  let last = 0;
+  const step = ts => {
+    camAnim = 0;
+    if (ts - last < 1000 / 30 - 2) { camAnim = requestAnimationFrame(step); return; }
+    last = ts;
+    const k = Math.min(1, Math.max(0, (ts - t0) / ms)), e = k * k * (3 - 2 * k), zt = z0 + (z - z0) * e;
+    const u = Math.abs(w1 - w0) > 1e-12 ? (Math.pow(2, -zt) - w0) / (w1 - w0) : e;
+    MapApi.jump([c0[0] + (c[0] - c0[0]) * u, c0[1] + (c[1] - c0[1]) * u], zt);
+    if (k < 1) camAnim = requestAnimationFrame(step); else gaugeSync();
+  };
+  camAnim = requestAnimationFrame(step);
+}
+function fitSmooth(lls, o) { const t = fitTarget(lls, o); camTo(t.c, t.z); }
+// 실제 위치 표식 옮기기: 처음 한 번만 만들고, 그 뒤엔 새 위치까지 다음 위치가 올 때(HERE_GLIDE_MS)까지 곧게 미끄러진다 — 위치가 2초마다 와도
+// 표식·지도 가운데가 2초마다 뛰지 않는다. 2 km 넘게 벌어지면(첫 고정·다른 곳으로 옮김) 바로 옮긴다. 화면 갱신은 초당 30번까지만
+const HERE_GLIDE_MS = 2000, hereAnim = { cur: null, from: null, to: null, t0: 0, raf: 0, last: 0 };
+function hereAnimStop() { if (hereAnim.raf) cancelAnimationFrame(hereAnim.raf); Object.assign(hereAnim, { cur: null, from: null, to: null, t0: 0, raf: 0, last: 0 }); }
+function hereMoveTo(ll) {
+  if (!herePuck || !hereAnim.cur || geoDist(hereAnim.cur, ll) > 2000) {
+    hereAnimStop(); hereAnim.cur = ll.slice();
+    if (herePuck) herePuck.setLatLng(ll); else herePuck = mePuck(ll);
+    if (!followPaused && !routeView) MapApi.setView(ll, userZoom ?? CARMAP.zoom);
+    return;
+  }
+  if (geoDist(hereAnim.cur, ll) < 0.5) return;   // 그대로(서 있음) — 지도를 건드리지 않는다
+  hereAnim.from = hereAnim.cur.slice(); hereAnim.to = ll.slice(); hereAnim.t0 = performance.now();
+  if (!hereAnim.raf) hereAnim.raf = requestAnimationFrame(hereStep);
+}
+function hereStep(ts) {
+  hereAnim.raf = 0;
+  if (!herePuck || !hereAnim.to) return;
+  if (ts - hereAnim.last >= 1000 / 30 - 2) {
+    hereAnim.last = ts;
+    const k = Math.min(1, Math.max(0, (ts - hereAnim.t0) / HERE_GLIDE_MS)), a = hereAnim.from, b = hereAnim.to;
+    hereAnim.cur = [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
+    herePuck.setLatLng(hereAnim.cur);
+    if (!followPaused && !routeView && !camAnim && MapApi.setCenter) MapApi.setCenter(hereAnim.cur);
+    if (k >= 1) { hereAnim.to = null; return; }
+  }
+  hereAnim.raf = requestAnimationFrame(hereStep);
+}
+// 실제 위치 모드의 함께 가기 = 시연 구간(경부 하행) 주행: 지도 오른쪽 위에 그 사실을 한 줄로(앱 판의 "시연 주행 · 경부고속도로 하행"과 같은 말)
+function demoNote() {
+  const el = document.getElementById('demonote'); if (!el) return;
+  el.textContent = T('시연 구간 · 경부고속도로 하행', 'Demo section · Gyeongbu Expwy southbound');
+  el.hidden = !(HERE_ON && !PREVIEW && !qs.get('rv'));   // rv 가 있으면 실제 경로 위 함께 가기(B-107) — 시연 구간이 아니다
+}
+function hereClear() {
+  clearTimeout(hereTimer); hereLL = null; routeView = false; hereAnimStop();
+  if (herePuck) { herePuck.remove(); herePuck = null; }
+  myRouteParts.forEach(p => p.remove()); myRouteParts = []; myRouteKey = '';
+  for (let i = scaledLines.length - 1; i >= 0; i--) if (scaledLines[i].mine) scaledLines.splice(i, 1);
+  const w = document.getElementById('herewait'); if (w) w.hidden = true;
+}
+async function hereTick() {
+  clearTimeout(hereTimer);
+  if (!(HERE_ON && PREVIEW) || !mapOn) return;
+  const w = document.getElementById('herewait');
+  try {
+    const h = await api('GET', '/api/app/here');
+    if (!(HERE_ON && PREVIEW)) return;
+    if (h && h.ok) {
+      hereLL = [h.lat, h.lon]; w.hidden = true;
+      hereMoveTo(hereLL);   // 표식은 새로 만들지 않고 2초 동안 미끄러져 옮긴다(11-14 "부드럽지 않아")
+    } else {
+      hereLL = null; hereAnimStop(); if (herePuck) { herePuck.remove(); herePuck = null; }
+      w.textContent = (h && h.wait) || T('위치를 받는 중', 'Getting your location'); w.hidden = false;
+    }
+    const r = await api('GET', '/api/app/myroute');
+    const key = r && r.ok ? r.distM + ':' + r.pts.length + ':' + r.name : '';
+    if (key !== myRouteKey) {
+      myRouteKey = key; myRouteParts.forEach(p => p.remove()); myRouteParts = [];
+      for (let i = scaledLines.length - 1; i >= 0; i--) if (scaledLines[i].mine) scaledLines.splice(i, 1);
+      if (key) {
+        const b = MAPSCALE.base;
+        const o = {latlngs: r.pts, color: '#178BF5', weight: CARMAP.width, opacity: 1, casing: {color: 'rgba(20,52,90,.82)', weight: CARMAP.width + CARMAP.edge * 2, opacity: 1}};
+        const ret = MapApi.line(o); scaledLines.push({ o, base: b.width, caseBase: b.width + b.edge * 2, ret, mine: true }); myRouteParts.push(ret);
+        routeView = true;   // 새 경로: 경로 전체를 한 번 보인다([내 위치]를 누르면 다시 내 위치로)
+        const f = CARMAP.focusPad;
+        fitSmooth([hereLL || r.pts[0], r.to, ...r.pts.filter((_, i) => i % 20 === 0)], {left: PADL + f.extraLeft, top: f.top, right: f.right, bottom: f.bottom, maxZoom: CARMAP.maxZoom});
+        recBtn.hidden = false;
+      } else { routeView = false; if (!followPaused) recBtn.hidden = true; }
+      gaugeSync();
+    }
+  } catch (e) { /* 내장 서버가 아닌 곳(PC 허브)에는 /api/app 이 없다 — 조용히 */ }
+  hereTimer = setTimeout(hereTick, 2000);
+}
+let ME = PREVIEW ? '' : qs.get('me') || localStorage.getItem('gb_me_' + GID) || '';
 let LANG = 'ko';
 const T = (ko, en) => LANG === 'en' ? en : ko;
 if (CAR) document.body.classList.add('car');
@@ -481,6 +804,7 @@ const HZ = {
   CHARGER_WAIT:  {c: '#0284c7', g: 'charger_wait', i: 'timer', lv: 'info', ko: '충전 대기', en: 'Charging queue'},
   OFFICIAL:   {c: '#f62e24', g: 'official', i: 'flag',    lv: 'warn', ko: '도로 정보', en: 'Road info'},   // 순정 내비 돌발 정보(사고 의심과 겹치지 않는 것만 따로)   // 뒤에서 다가오는 긴급차량(사이렌을 들은 차들로 짐작한 위치)
 };
+const SIDE_NAME = {oncoming: {ko: '맞은편', en: 'Oncoming'}, unsure: {ko: '방향 불확실', en: 'Direction unclear'}};   // 허브의 SIDE_KO·SIDE_EN 과 같은 말(허브가 note 를 안 줬을 때만 쓴다)
 const hzName = h => h.flood ? T('침수 의심', 'Flooding?') : h.type === 'OFFICIAL' ? h.label
   : (h.charger && h.charger.human) || (h.chargerOfficial && !h.charger) ? h.label   // 충전기: 사람 신고('충전기 3번 고장 신고')·공식 상태만('충전기 2대 점검중(공식)')은 허브 이름표
   : h.type === 'SIREN' && (h.beacon || h.yieldOnly) ? esc(h.label)   // 긴급차량: 허브 이름표 '구급차(위치 신호)'(비컨) · '긴급차량 추정'(비킴만) — 마이크만이면 '긴급차량'
@@ -523,17 +847,69 @@ const baseStyle = async dark => {
 const mapReady = (async () => {
   await mapLoad();
   // 출처 줄(Leaflet 경로): 지도 + 휴게소 충전소 공공데이터(공공누리 1유형은 출처 표시 의무 — DATA_SOURCES.md, docs/dev/89 7절). TMAP 경로는 출처 컨트롤이 없다(87 B-62)
-  MapApi.create('map', { dark: isDark(), car: CAR, style: baseStyle, credit: '© OpenFreeMap © OpenMapTiles © OpenStreetMap' + (LANG !== 'en' ? ' · 충전소 한국환경공단(공공누리 1유형)' : '') });
+  MapApi.create('map', { dark: isDark(), car: CAR, leaflet: CAR ? { zoomSnap: 0 } : undefined, style: baseStyle, credit: '© OpenFreeMap © OpenMapTiles © OpenStreetMap' + (LANG !== 'en' ? ' · 충전소 한국환경공단(공공누리 1유형)' : '') });
   mapOn = true;
   await new Promise(r => MapApi.ready(r));
+  applyMapU();   // 지도 크기가 정해진 뒤 — 노선을 그리기 전에
+  // 화면 크기가 바뀌어 비례(u)가 달라지면 표식을 새 크기로 다시 만든다(표식은 한 번만 만들고 옮기므로 — 주행 화살촉·실제 위치 점은 다음 갱신 때 다시 생긴다)
+  addEventListener('resize', () => { if (!applyMapU()) return; if (glide.marker) { glide.marker.remove(); glide.marker = null; } if (herePuck) { herePuck.remove(); herePuck = null; } if (routeDrawn && PREVIEW) previewPlace(); });
 })();
 // 휴대폰은 시스템 다크 모드를 따라간다. TMAP 은 테마를 바꾸면 GL 도형이 지워질 수 있어(어댑터가 경로 선을 다시 만든다) 표시도 다시 그린다
 if (!CAR) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', async () => {
   await mapReady; await MapApi.setDark(isDark());
   if (MapApi.kind === 'tmap' && lastView) draw(lastView);
 });
-const layer = MapApi.group();
+// 3초마다 그리는 표지(위험·이름표·다른 차·일행): 예전엔 매번 전부 지우고 새로 만들었다 — 에뮬레이터에서 그 순간 화면이 0.3~0.75초 멈췄다(11-14 [MAPT] glide gapMax).
+// 지금은 이름표(key)가 같은 것은 그대로 두고 자리만 옮기며, 없어진 것만 지우고 새로 생긴 것만 만든다
+const layer = (() => {
+  const pool = new Map(); let gen = 0, made = 0, moved = 0, gone = 0;
+  return {
+    stat() { const t = `${made}/${moved}/${gone}`; made = moved = gone = 0; return t; },
+    begin() { gen++; },
+    add(key, ll, make) {
+      let e = pool.get(key);
+      if (e) { if (e.ll[0] !== ll[0] || e.ll[1] !== ll[1]) { if (e.obj.setLatLng) e.obj.setLatLng(ll); else { e.obj.remove(); e.obj = make(); } e.ll = ll; moved++; } }
+      else { e = { obj: make(), ll }; pool.set(key, e); made++; }
+      e.gen = gen; return e.obj;
+    },
+    end() { for (const [k, e] of pool) if (e.gen !== gen) { e.obj.remove(); pool.delete(k); gone++; } },
+    clear() { for (const e of pool.values()) e.obj.remove(); pool.clear(); },
+  };
+})();
 let routeDrawn = false, lastFit = 0, ROUTE = null;
+let accidentAt = [], accidentLabels = [], previewPuck = null;
+// 목적지(앱이 주소 dest=경로 위 자리|위도|경도|이름 으로 넘긴다 — 실제 장소 검색 값). 깃발 + 이름 + 경로 위 자리에서 장소까지 점선
+let DEST = null, destParts = [];
+function parseDest(q) {
+  const v = q.get('dest'); if (!v) return null;
+  const [s, lat, lon, ...name] = v.split('|');
+  return Number.isFinite(+s) && Number.isFinite(+lat) && Number.isFinite(+lon) ? {s: +s, ll: [+lat, +lon], name: name.join('|')} : null;
+}
+DEST = parseDest(qs);
+function syncDest() {
+  destParts.forEach(p => p.remove()); destParts = [];
+  if (!DEST || !CAR) return;
+  destParts.push(MapApi.puck({latlng: DEST.ll, html: `<div class="destpin">${icon('flag', '')}</div>`, size: 40, interactive: false, z: 900}));
+  destParts.push(MapApi.label({latlng: DEST.ll, html: esc(DEST.name), dx: 24, cls: 'tag', opacity: .95}));
+  const on = HERE_ON ? null : posAt(DEST.s);   // 실제 위치 모드는 실제 경로를 그리므로 시연 경로와 잇는 점선은 없다
+  if (on && MapApi.line) destParts.push(MapApi.line({latlngs: [on, DEST.ll], color: '#1C1E22', weight: 4, opacity: .8, dash: '4 6'}));
+}
+// 사고 다발 이름표는 주행 화면에서만(첫 화면은 구간 색만)
+function syncAccidentLabels() {
+  const want = !PREVIEW;
+  if (want && !accidentLabels.length) accidentLabels = accidentAt.map(ll => MapApi.label({latlng: ll, html: esc(T('사고 다발', 'Accident-prone')), dx: -10, cls: 'tag', opacity: .9}));
+  if (!want && accidentLabels.length) { accidentLabels.forEach(l => l && l.remove()); accidentLabels = []; }
+}
+// 첫 화면: 시연 출발점을 알면 내 위치 점 + 그 자리 가운데 맞춤(주행 화면 follow 와 같다). 모르면 경로 전체
+function previewPlace() {
+  if (previewPuck) { previewPuck.remove(); previewPuck = null; }
+  // 휴대폰(차가 아님)은 예전처럼 경로 전체를 맞춘다 — 11-14 밤에 첫 화면 규칙을 넣으며 이 줄이 빠져 휴대폰 합류 화면이 기본 위치(서울 시청)에 머물렀다(제출 캡처에서 발견)
+  if (!PREVIEW) { if (!CAR) MapApi.fit(ROUTE.route, {top: 20, right: 20, bottom: 20, left: 20 + PADL}); return; }
+  if (HERE_ON) { hereTick(); return; }   // 실제 위치 모드: 시연 출발 자리에 점을 찍지 않는다
+  const startLL = CAR && Number.isFinite(START_S) ? posAt(START_S) : null;
+  if (startLL) { previewPuck = mePuck(startLL); follow(START_S); }
+  else MapApi.fit(ROUTE.route, {top: 20, right: 20, bottom: 20, left: 20 + PADL});
+}
 
 // 경로 위 거리 s → 위경도(익명 차는 위치 대신 s만 받는다)
 let CUM = null;
@@ -546,17 +922,24 @@ function posAt(s) {
   return null;
 }
 
-async function drawRoute() {
-  await mapReady;
-  ROUTE = await api('GET', '/api/road/route');
+// 시연 경로(경부 하행) 모양: 노선·휴게소·구역. 실제 위치 모드의 첫 화면에서는 그리지 않고, 함께 가기로 시연 구간에 들어가면 그린다(11-14 오후)
+let demoParts = [];
+function drawDemoGeometry() {
+  if (demoParts.length || !ROUTE) return;
+  accidentAt = [];
   // 경로: 순정 노선처럼 파랑 + 진한 파랑 테(rider.html 의 노선과 같다)
-  MapApi.line({latlngs: ROUTE.route, color: '#0064FF', weight: CAR ? 8 : 5, opacity: 1, casing: {color: '#0046B4', weight: CAR ? 12 : 9, opacity: 1}});
+  if (CAR) {   // 차 화면은 첫 화면(preview)도 주행 화면과 같은 노선 모습 — 함께 가기를 눌러도 지도가 바뀌어 보이지 않게
+    const night = isDark();
+    const c = ROUTE_LOOK === 'ink' ? (night ? {line: '#DCE0E6', edge: '#101318'} : {line: '#343A42', edge: '#FFFFFF'}) : {line: '#178BF5', edge: 'rgba(20,52,90,.82)'};
+    const b = MAPSCALE.base;
+    demoParts.push(routeLine = scaledLine({over: CARMAP.overLines, latlngs: ROUTE.route, color: c.line, weight: CARMAP.width, opacity: 1, casing: {color: c.edge, weight: CARMAP.width + CARMAP.edge * 2, opacity: 1}}, b.width, b.width + b.edge * 2));
+  } else demoParts.push(MapApi.line({latlngs: ROUTE.route, color: '#0064FF', weight: CAR ? 8 : 5, opacity: 1, casing: {color: '#0046B4', weight: CAR ? 12 : 9, opacity: 1}}));
   for (const r of ROUTE.restAreas) {
     const big = r.kind === 'services', name = esc(LANG === 'en' ? r.nameEn : r.name), ll = [r.lat, r.lon];
     // 큰 휴게소만 이름을 늘 띄운다(퍽 왼쪽 10px). 작은 곳은 마우스 툴팁(Leaflet 만)
-    MapApi.puck({latlng: ll, html: `<img class="restsign" src="${HZIMG.rest}" alt="">`, size: big ? (CAR ? 34 : 26) : (CAR ? 26 : 20), interactive: false,
-      tip: big ? null : name, tipOpts: {direction: 'left', className: 'tag', offset: [-10, 0]}});
-    if (big) MapApi.label({latlng: ll, html: name, dx: -10, cls: 'tag', opacity: .9});
+    demoParts.push(MapApi.puck({latlng: ll, html: `<img class="restsign" src="${HZIMG.rest}" alt="">`, size: big ? (CAR ? 34 : 26) : (CAR ? 26 : 20), interactive: false,
+      tip: big ? null : name, tipOpts: {direction: 'left', className: 'tag', offset: [-10, 0]}}));
+    if (big) demoParts.push(MapApi.label({latlng: ll, html: name, dx: -10, cls: 'tag', opacity: .9}));
   }
   // 구역(사고 다발 구간·터널): 경로 위에 겹쳐 그린다. 교량은 짧아 결빙 안내 때만 말로
   for (const z of ROUTE.zones || []) {
@@ -564,62 +947,472 @@ async function drawRoute() {
     const pts = []; for (let s = z.s0; s <= z.s1; s += 50) { const p = posAt(s); if (p) pts.push(p); }
     const p1 = posAt(z.s1); if (p1) pts.push(p1);
     if (pts.length < 2) continue;
-    MapApi.line({latlngs: pts, color: z.kind === 'accident' ? '#ff8a00' : '#64748b', weight: CAR ? 8 : 5, opacity: .95, dash: z.kind === 'tunnel' ? '6 6' : null});
-    if (z.kind === 'accident' && !PREVIEW) MapApi.label({latlng: pts[0], html: esc(T('사고 다발', 'Accident-prone')), dx: -10, cls: 'tag', opacity: .9});
+    const zo = {over: CAR && CARMAP.overLines, latlngs: pts, color: z.kind === 'accident' ? '#ff8a00' : '#64748b', weight: CAR ? MAPSCALE.base.zone * mapU : 5, opacity: .95, dash: z.kind === 'tunnel' ? '6 6' : null};
+    const zl = CAR ? scaledLine(zo, MAPSCALE.base.zone) : MapApi.line(zo);
+    demoParts.push(zl); zoneLines.push({ s0: z.s0, s1: z.s1, line: zl, li: z.kind === 'accident' ? accidentAt.length : null });
+    if (z.kind === 'accident') accidentAt.push(pts[0]);
   }
-  MapApi.fit(ROUTE.route, {top: 20, right: 20, bottom: 20, left: 20});
-  routeDrawn = true;
+  syncAccidentLabels();
+}
+function clearDemoGeometry() {
+  const gone = new Set(demoParts); demoParts.forEach(p => p && p.remove && p.remove()); demoParts = [];
+  for (let i = scaledLines.length - 1; i >= 0; i--) if (gone.has(scaledLines[i].ret)) scaledLines.splice(i, 1);
+  accidentLabels.forEach(l => l && l.remove()); accidentLabels = []; accidentAt = [];
+  routeLine = null; zoneLines = [];
+  ringParts.forEach(r => r.remove()); ringParts = []; ringKey = '';   // 고리는 노선보다 나중에 만들어야 그 위에 온다 — 다음 그리기 때 다시 만든다
 }
 
-let world = null;
-function draw(v) {
+async function drawRoute() {
+  await mapReady;
+  ROUTE = await api('GET', '/api/road/route');
+  if (!(HERE_ON && PREVIEW)) drawDemoGeometry();   // 실제 위치 모드 첫 화면은 시연 경로를 그리지 않는다(함께 가기를 시작하면 그린다)
+  syncAccidentLabels();
+  syncDest();
+  previewPlace();
+  // 처음 켤 때 지도 크기가 아직 자리 잡기 전에 맞추면 내 위치가 화면 밖에 남았다(11-13 5570 설치 직후 한 번) — 1.5초 뒤·창 크기가 바뀔 때 한 번 더 맞춘다
+  const refit = () => { if (PREVIEW && !HERE_ON && Number.isFinite(START_S)) follow(START_S); };   // 실제 위치 모드는 hereTick 이 맞춘다
+  setTimeout(refit, 1500);
+  addEventListener('resize', refit);
+  routeDrawn = true;
+  mapt('route-drawn');
+}
+
+// 차 앱(지도 우선 화면)의 붉은 번짐 고리: 지금 안내 중인 위험 지점에 지도 원 도형 세 겹(화면 지름 150·250·360 px 에 맞춰 줌마다 m 로 바꾼다).
+// 고정 고리다 — 숨쉬기(불투명도 반복)는 넣지 않았다: HTML 마커로 그리면 TMAP 이 다른 표지를 못 그렸고, 원 도형을 0.4초마다 다시 만들면
+// 지도가 '그리기 끝'(RenderComplete)에 닿지 못해 아예 뜨지 않았다(11-13 에뮬레이터 두 번). 위치·줌이 바뀔 때만 다시 그린다. 고리 오류는 지도 그리기를 막지 않는다
+let ringAt = null, ringKey = '', ringParts = [], lastFocusKey = '';
+const RING = [[75, .55, .16], [125, .28, 0], [180, .14, 0]];   // 화면 반지름 px · 선 진하기 · 면 진하기
+function ringPaint() {
+  try {
+    const z = ringAt && mapOn && MapApi.getZoom ? MapApi.getZoom() : null;
+    const key = ringAt && Number.isFinite(z) ? `${ringAt[0].toFixed(5)},${ringAt[1].toFixed(5)},${Math.round(z * 2)}` : '';
+    if (key === ringKey) return;
+    // 지도 줌이 미끄러져 바뀌는 동안(두 점 맞춤 드나들기)은 같은 자리의 고리를 다시 만들지 않는다 — 3초 그리기가 가끔 0.2~0.7초 걸려 화면이 멈췄고(11-14 에뮬레이터) 원 도형 셋을 다시 만드는 것이 까닭으로 의심된다(진단 줄 ringMax 로 잰다). 줌이 자리 잡으면 그때 한 번
+    if (key && ringParts.length && ringKey.startsWith(key.slice(0, key.lastIndexOf(',') + 1)) && Number.isFinite(glide.zoomWant) && Math.abs(glide.zoomWant - glide.zoom) > 0.04) return;
+    const r0 = performance.now();
+    ringKey = key;
+    if (!key) { ringParts.forEach(r => r.show(false)); return; }   // 지우지 않고 감춘다 — 다음 위험 때 다시 쓴다
+    const mpp = 156543.03 * Math.cos(ringAt[0] * Math.PI / 180) / Math.pow(2, z);
+    RING.forEach(([r, so, fo], i) => {
+      if (ringParts[i]) { ringParts[i].set(ringAt, r * mpp); ringParts[i].show(true); }
+      else ringParts[i] = MapApi.circle({latlng: ringAt, radius: r * mpp, color: '#ff453a', weight: 2, opacity: so, fillColor: '#ff453a', fillOpacity: fo});
+    });
+    glide.ringMax = Math.max(glide.ringMax, performance.now() - r0);
+  } catch (e) { console.warn('ring', e); }
+}
+
+// 차 화면 주행(11-14 오후, 사용자 "안내할때 지도가 부드럽지않아" · "지나온 노선은 그려지지 않게해"): 3초마다 받는 내 자리 사이를 속도로 이어
+// 다시 그리는 횟수(11-14 16:38 사용자 "새로고침 빈도를 조금 줄여서 최적화해봐"): 초당 최대 20번(전 30). 에뮬레이터에서 재 본 것 — 표식은 그대로 두고 지도만 12·8번으로 낮추면
+// 앞 장과 같은 장면이 34 % → 40~47 %, 가장 긴 멈춤 0.4 → 1.0초로 나빠졌고, 전체를 15번으로 묶은 것은 나빠지지 않았다(27 %). 그래서 지도·표식을 같이, 조금만 낮췄다(mapHz 로 따로 낮출 수 있게는 둠)
+// 표식·지도 가운데·노선의 시작점을 화면 갱신마다(최대 초당 GLIDE.fps 번) 조금씩 옮긴다. 표식은 새로 만들지 않고 자리만 옮기고(setLatLng),
+// 노선은 좌표만 바꾼다(setLatLngs → setPath). 지나온 노선은 그리지 않는다 — 노선은 내 표식에서 앞으로만.
+// 내 자리 어림(11-14 사용자 "차가 굼뱅이 처럼감 갔다가 멈추고 갔다가 멈추고"): 차는 허브에 자리를 1초에 한 번 계단으로 올린다(시연 주행은 한 번에 약 90 m).
+// 예전 판은 3초마다 읽은 값(0~1초 묵은 값)까지 갔다가 다음 값을 기다려, 읽는 때에 따라 섰다 갔다 했다. 지금은
+//  ① 내 속도(v = 표시 속도 × 배율 k)로 쉬지 않고 나아간다(odo). k = 최근 25초 동안 실제로 나아간 거리 ÷ 표시 속도로 갔을 거리(시연 주행 약 4, 실차 1)
+//  ② 받은 값과의 차이(off)는 한 번에 맞추지 않고 조금씩 — 속도의 ±30 % 안에서만(GLIDE.slew). 그래서 달리는 동안 서거나 뒤로 가지 않는다
+//  ③ 받은 값은 0~1초 묵었으므로 최근 몇 개 가운데 가장 앞선 것(덜 묵은 것)을 믿는다. 자리만 1초쯤마다 따로 읽는다(GLIDE.posMs, 때를 흩어 — 표식·위험은 3초마다 그대로)
+// 갱신 간격(11-14 21:10, 사용자 "너무 끊긴다 조금 텀을 늘려봐" → 고른 답 "갱신 간격 늘리기"): 초당 20번 → 12번(약 83 ms 마다). 4막 시험 녹화(20:58~21:01, PC 가 바쁠 때)에서
+// 화면 갱신이 초당 9~15번으로 들쭉날쭉하고 0.4~1.2초씩 멈췄다([MAPT] glide raf·gapMax) — 낼 수 있는 만큼보다 낮게 잡아 고르게 그린다. 자리 셈은 실제 시간으로 하므로 차 속도는 그대로
+// 11-14 22:30 다시 20번: 12번으로 낮춘 것은 에뮬레이터에서 달라진 것이 없었다(잰 값 같음 — 한계는 에뮬레이터가 지도를 그리는 속도). 초당 60장 화면에서는 20번이 더 부드럽다(PC 브라우저로 확인, 실제 차는 확인 안 함). 12번으로 되돌리려면 아래 두 숫자만
+const GLIDE = { fps: 20, mapHz: 20, lab: false, tauDeg: 0.35, tauCam: 0.8, tauZoom: 1.0, tauQuick: 0.22, quickMs: 1500, trimStepM: 6,   // tauQuick: [내 위치]·[+]·[−] 를 누른 뒤 1.5초는 빨리(예전엔 줌 복귀가 수 초 늦었다)
+  ffZoom: 13, posMs: [800, 1300], win: 5, histMs: 25000, tauOff: 1.6, slew: 0.3, creep: 6, snapM: 400, gapMs: 12000 };
+const glide = { s: NaN, v: 0, k: NaN, odo: 0, off: NaN, offWant: NaN, tOdo: 0, hist: [], raf: 0, last: 0, marker: null, deg: NaN, cam: null, zoom: NaN, cam1: null, zoom1: NaN, trimS: NaN, frames: 0, rafN: 0, gapMax: 0, statT: 0, statN: 0, tMark: 0, tTrim: 0, tCam: 0, drawMax: 0, ringMax: 0, zoomWant: NaN, dtAvg: 0.05, mapLast: 0, mapN: 0, ff: 1, rafLast: 0, rafMs: 50, nStep: 1, nHold: 0, nCnt: 0, mapCnt: 0 };
+const GLIDE_LAB = [{ fps: 12, mapHz: 12 }, { fps: 20, mapHz: 20 }, { fps: 30, mapHz: 30 }, { fps: 8, mapHz: 8 }];   // 재는 판에서만
+let routeLine = null, zoneLines = [], glideQuickUntil = 0, posTimer = 0;   // 시연 경로 노선(잘라 가는 대상)·구역 선({s1, line})
+// 시간만큼 나아가기: odo 는 속도로, off 는 받은 값 쪽으로 조금씩. 화면 갱신마다와 새 값이 올 때 부른다
+function glideAdvance(now) {
+  const dt = glide.tOdo ? Math.min(2, Math.max(0, (now - glide.tOdo) / 1000)) : 0; glide.tOdo = now;
+  if (!dt || !Number.isFinite(glide.off)) return;
+  glide.odo += glide.v * dt;
+  const d = (glide.offWant - glide.off) * (1 - Math.exp(-dt / GLIDE.tauOff));
+  glide.off += Math.max(-GLIDE.slew * glide.v * dt, Math.min((GLIDE.slew * glide.v + GLIDE.creep) * dt, d));   // 섰을 때(v 0)는 뒤로 가지 않고, 앞으로만 천천히(초당 6 m) 맞춘다
+  glide.s = glide.odo + glide.off;
+}
+function glideFeed(sNow, kmh) {
+  const now = performance.now(), h = glide.hist, prev = h[h.length - 1];
+  glideAdvance(now);
+  if (!prev || now - prev.t > GLIDE.gapMs || Math.abs(sNow - glide.s) > Math.max(GLIDE.snapM, glide.v * 4)) {   // 처음·오래 끊김·크게 벌어짐: 바로 그 자리로
+    h.length = 0; glide.off = glide.offWant = sNow - glide.odo; glide.s = sNow; glide.tOdo = now;
+  }
+  h.push({ t: now, s: sNow, kmh, odo: glide.odo });
+  while (h.length > 2 && now - h[0].t > GLIDE.histMs) h.shift();
+  // 배율 k: 실제로 나아간 거리 ÷ 표시 속도로 갔을 거리(사다리꼴 적분). 30 m 넘게 갔을 때만 믿는다
+  let den = 0;
+  for (let i = 1; i < h.length; i++) den += (h[i].kmh + h[i - 1].kmh) / 2 / 3.6 * (h[i].t - h[i - 1].t) / 1000;
+  const num = sNow - h[0].s;
+  if (den > 30 && num > 0) glide.k = Math.max(0.3, Math.min(12 * glide.ff, num / den));
+  // 속도: 표시 속도 × k. 표시 속도가 없거나 k 를 아직 모르면 3초 넘게 떨어진 두 값의 기울기
+  const far = h.find(x => now - x.t >= 2500 && now - x.t <= 9000), slope = far ? Math.max(0, (sNow - far.s) / ((now - far.t) / 1000)) : NaN;
+  if (Number.isFinite(kmh)) glide.v = kmh < 1 ? 0 : Number.isFinite(glide.k) ? glide.k * kmh / 3.6 : Number.isFinite(slope) ? slope : kmh / 3.6;
+  else if (Number.isFinite(slope)) glide.v = slope;
+  glide.v = Math.min(150 * glide.ff, glide.v);
+  glide.offWant = Math.max(...h.slice(-GLIDE.win).map(x => x.s - x.odo));
+  if (!glide.raf) { glide.last = now; glide.raf = requestAnimationFrame(glideStep); }
+}
+// 자리만 따로 읽기(차 화면 주행 중): 약 1초마다, 때를 흩어서 — 차가 1초마다 올리는 계단의 어느 때를 읽는지가 한쪽으로 쏠리지 않게
+// 빠르게 감기(시연 영상용, 앱 훅 ff — 사건 없는 구간에서 허브 시각과 내 자리가 N 배로 간다. 앱 내장 서버 /api/app/ff → {ok, rate}): 배율이 바뀌면 자리 어림의 속도·배율 k 를 그 비만큼 바로 고치고
+// (표시 속도는 그대로인데 자리만 N 배로 가므로), 그동안 지도는 멀리서 본다(GLIDE.ffZoom — 줌 15 로는 초당 600 m 를 타일이 못 따라온다). 1 로 돌아오면 평소 주행 줌으로 미끄러져 돌아온다
+let ffOff = false;
+function ffSet(rate) {
+  rate = Math.max(1, Math.min(16, rate));
+  if (rate === glide.ff) return;
+  const q = rate / glide.ff; glide.ff = rate;
+  glide.v *= q; if (Number.isFinite(glide.k)) glide.k *= q;
+  glide.hist = glide.hist.slice(-1);   // 배율이 다른 때의 값으로 k 를 다시 재지 않게
+}
+async function posPoll(gen) {
+  clearTimeout(posTimer);
+  if (gen !== pollGen || !CAR || PREVIEW || !ME) return;
+  try {
+    const [w, f] = await Promise.all([api('GET', `/api/road/world?me=${encodeURIComponent(ME)}`), ffOff ? null : api('GET', '/api/app/ff').catch(() => { ffOff = true; return null; })]);   // ff: 없는 곳(PC 허브·예전 앱)은 한 번 묻고 그만
+    if (gen !== pollGen) return;
+    if (f && f.ok && Number.isFinite(f.rate)) ffSet(f.rate);
+    const mine = ((w && w.cars) || []).find(c => c.me);
+    if (mine && Number.isFinite(mine.s)) glideFeed(mine.s, Number.isFinite(mine.kmh) ? mine.kmh : NaN);
+    if (w && w.cars && drawV) { world = w; draw(drawV, true); }   // 다른 차·일행 차 표식을 이 주기로(위 draw 설명)
+  } catch (e) { /* 다음 번에 */ }
+  if (gen === pollGen) posTimer = setTimeout(() => posPoll(gen), GLIDE.posMs[0] + Math.random() * (GLIDE.posMs[1] - GLIDE.posMs[0]));
+}
+function glideReset() {
+  if (glide.raf) cancelAnimationFrame(glide.raf);
+  clearTimeout(posTimer); posTimer = 0;
+  if (glide.marker) glide.marker.remove();
+  Object.assign(glide, { s: NaN, v: 0, k: NaN, odo: 0, off: NaN, offWant: NaN, tOdo: 0, hist: [], raf: 0, last: 0, marker: null, deg: NaN, cam: null, zoom: NaN, cam1: null, zoom1: NaN, trimS: NaN, rafN: 0, gapMax: 0, statT: 0, statN: 0, ff: 1 });
+}
+// 노선의 시작점을 내 자리로(지나온 노선은 없다). GLIDE.trimStepM 넘게 나아갔을 때만 좌표를 바꾼다. 다 지나간 구역 선은 지운다
+function trimRoute(sAt) {
+  if (!routeLine || !routeLine.setLatLngs || !ROUTE) return;
+  let sNow, here;
+  if (routeLine.trim) {   // 겹쳐 긋는 선(MapApi 의 over 설명): 걸음마다 내 자리에서 시작한다. 다시 만드는 값이 없어 아래의 6 m 걸음·앞당김이 필요 없다(선은 표식 가운데에서 시작해 표식 동그라미 아래로 들어간다)
+    sNow = sAt; here = posAt(sNow); if (!here) return;
+    let i0 = 1; while (i0 < CUM.length && CUM[i0] <= sNow) i0++;
+    routeLine.trim(here, i0);
+  } else {
+  // 노선은 표식 가운데보다 조금 앞에서 시작한다: 선 끝은 굵기의 반만큼 뒤로 더 그려지고(테두리 포함 8.5u), 표식(HTML)은 지도 그림보다 화면 갱신 한 번쯤 먼저 움직여
+  // 그만큼 노선 끝이 표식 뒤로 삐져나와 보였다(11-14 에뮬레이터 녹화 — 주행 장면의 56 %). 앞으로 당긴 만큼은 표식 동그라미가 덮는다
+  const mppNow = 156543.03 * Math.cos(37.3 * Math.PI / 180) / Math.pow(2, MapApi.getZoom ? MapApi.getZoom() : CARMAP.zoom);
+  // 표식 동그라미(반지름 23u)가 덮는 범위 안에서: 선 끝 모양(8.5u) + 화면 갱신 두세 번 사이에 나아가는 거리 + 3 px, 많아야 30u(그보다 앞이면 표식과 노선 사이가 뜬다)
+  sNow = sAt + Math.min(30 * mapU * mppNow, (CARMAP.width / 2 + CARMAP.edge + 3) * mppNow + glide.v * 2.5 * Math.min(0.3, glide.dtAvg));
+  if (Number.isFinite(glide.trimS) && Math.abs(sNow - glide.trimS) < GLIDE.trimStepM) return;
+  glide.trimS = sNow;
+  here = posAt(sNow); if (!here) return;
+  const r = ROUTE.route, pts = [here];
+  for (let i = 0; i < r.length; i++) if (CUM[i] > sNow) pts.push(r[i]);
+  if (pts.length >= 2) routeLine.setLatLngs(pts);
+  }
+  // 구역 선(사고 다발·터널)도 같다: 다 지나간 것은 지우고, 안에 들어와 있으면 내 자리부터 끝까지만. 지나간 사고 다발 이름표도 지운다(11-14 PC 확인 — 구역 선이 표식 뒤에 남았다)
+  for (let i = zoneLines.length - 1; i >= 0; i--) {
+    const z = zoneLines[i];
+    if (z.li != null && z.s0 < sNow && accidentLabels[z.li]) { accidentLabels[z.li].remove(); accidentLabels[z.li] = null; }
+    if (z.s1 < sNow) { z.line.remove(); zoneLines.splice(i, 1); continue; }
+    if (z.s0 < sNow && z.line.setLatLngs) {
+      const zp = [here]; for (let s = Math.ceil(sNow / 50) * 50; s < z.s1; s += 50) { const p = posAt(s); if (p) zp.push(p); }
+      const p1 = posAt(z.s1); if (p1) zp.push(p1);
+      if (zp.length >= 2) z.line.setLatLngs(zp);
+    }
+  }
+}
+// 지도 가운데·줌: 평소엔 내 차를 가운데(줌 = 고른 줌 또는 기본), 안내 지점이 0.8~2.5 km 면 내 차와 그 지점이 둘 다 보이는 가운데·줌. 둘 사이를 오갈 때도 미끄러지듯
+function glideCamera(me, dt) {
+  const focus = lastFocus, fd = focus ? geoDist(me, focus) : Infinity;
+  // 평소: 내 차가 지도 한가운데 — 따라가기가 늦는 만큼(속도 × 시간 상수) 앞을 겨눠, 달리는 동안에도 표식이 가운데에 머문다. 주행 줌은 CARMAP.driveZoom
+  const quickNow = performance.now() < glideQuickUntil;
+  const baseZ = glide.ff > 1 ? Math.min(userZoom ?? 99, GLIDE.ffZoom) : (userZoom ?? CARMAP.driveZoom), lagC = posAt(glide.s + glide.v * (quickNow ? GLIDE.tauQuick : GLIDE.tauCam)) || me;
+  // 표식을 가는 방향 반대쪽으로 조금 민다(11-14 저녁 사용자 "마커가 너무 중앙에 있다 하행하면 조금 위에 상행하면 조금 아래"): 지도 가운데 = 내 자리에서 진행 방향으로
+  // 지도 높이의 CARMAP.aheadFrac(17 %)만큼 앞 — 하행(화면 아래로)이면 표식이 가운데보다 위, 상행이면 아래, 동·서로 가면 옆. 앞길이 그만큼 더 보인다. 방향은 미끄러지듯 도는 표식 방위(glide.deg)
+  const aheadM = CARMAP.aheadFrac * MapApi.size().y * 156543.03 * Math.cos(me[0] * Math.PI / 180) / Math.pow(2, Number.isFinite(glide.zoom) ? glide.zoom : baseZ), br = (Number.isFinite(glide.deg) ? glide.deg : headingAt(glide.s)) * Math.PI / 180;
+  const followC = [lagC[0] + Math.cos(br) * aheadM / 111320, lagC[1] + Math.sin(br) * aheadM / (111320 * Math.cos(me[0] * Math.PI / 180))];
+  let wantC = followC, wantZ = baseZ, focusFits = false;
+  if (focus && glide.ff === 1 && fd >= CARMAP.focusMinM && fd <= CARMAP.focusNearM) {
+    const f = CARMAP.focusPad, sz = MapApi.size(), padL = PADL + f.extraLeft, cos = Math.cos(me[0] * Math.PI / 180);
+    const availW = Math.max(80, sz.x - padL - f.right), availH = Math.max(80, sz.y - f.top - f.bottom);
+    const dy = Math.abs(me[0] - focus[0]) * 111320, dx = Math.abs(me[1] - focus[1]) * 111320 * cos;
+    const mpp = Math.max(dy / availH, dx / availW, 0.01);
+    // 두 점 맞춤의 줌은 평소 줌과 같은 타일 단계(정수 줌) 안에서만 움직인다 — 단계를 넘나들면 새 타일을 통째로 받아야 해 에뮬레이터에서 지도가 2~3초 회색으로 비고 멈췄다(11-14 녹화).
+    // 그 단계 안에서 둘 다 안 보이는 거리면(이 화면에서는 약 2 km 넘게) 두 점 맞춤을 하지 않고 가운데 따라가기 그대로 — 거리는 판이 말해 준다
+    const fitZ = Math.log2(156543.03 * cos / mpp), lvl = Math.floor(wantZ + 1e-6);
+    focusFits = fitZ >= lvl;
+    wantZ = Math.min(lvl + 0.95, Math.max(lvl, fitZ));
+    const m2 = 156543.03 * cos / Math.pow(2, wantZ);   // 그 줌에서 CSS px 당 m — 판(왼쪽)·아래 여백만큼 가운데를 옮긴다
+    if (focusFits) wantC = [(me[0] + focus[0]) / 2 + (f.top - f.bottom) / 2 * m2 / 111320, (me[1] + focus[1]) / 2 - (padL - f.right) / 2 * m2 / (111320 * cos)];
+    else wantZ = baseZ;
+  }
+  if (!glide.cam) { glide.cam = wantC.slice(); glide.zoom = MapApi.getZoom ? MapApi.getZoom() : wantZ; }
+  if (!glide.cam1) { glide.cam1 = glide.cam.slice(); glide.zoom1 = glide.zoom; }
+  // 두 단 따라가기(앞 단 cam1 → 뒤 단 cam, 각 시간 상수의 절반): 한 단이면 바뀌는 순간 가장 빨리 출발해 두 점 맞춤으로 들어갈 때 화면이 한 프레임에 30~70 px 움직였다(11-14 PC 측정).
+  // 두 단은 출발·도착이 둘 다 느린 S 자. 꾸준히 따라갈 때 늦음(속도 × 시간 상수)은 한 단과 같다
+  const quick = performance.now() < glideQuickUntil;
+  const kc = 1 - Math.exp(-dt / ((quick ? GLIDE.tauQuick : GLIDE.tauCam) / 2)), kz = 1 - Math.exp(-dt / ((quick ? GLIDE.tauQuick : GLIDE.tauZoom) / 2));
+  for (const i of [0, 1]) { glide.cam1[i] += (wantC[i] - glide.cam1[i]) * kc; glide.cam[i] += (glide.cam1[i] - glide.cam[i]) * kc; }
+  const z0 = glide.zoom; glide.zoom1 += (wantZ - glide.zoom1) * kz; glide.zoom += (glide.zoom1 - glide.zoom) * kz;
+  if (Math.abs(wantZ - glide.zoom) < 0.005 && Math.abs(wantZ - glide.zoom1) < 0.005) glide.zoom = glide.zoom1 = wantZ;
+  glide.zoomWant = wantZ;
+  if (MapApi.jump) MapApi.jump(glide.cam, glide.zoom);   // 가운데·소수 줌을 한 번에
+  else { if (Math.abs(glide.zoom - z0) > 0.002 && MapApi.setZoom) MapApi.setZoom(glide.zoom); MapApi.setCenter(glide.cam); }
+}
+// 진단: 10초마다 한 줄 — 화면 갱신 수(초당), 가장 길었던 갱신 간격(ms), 속도·배율, 받은 값과의 차이(m). 자리 값은 싣지 않는다. 앱의 시연·디버그 빌드가 logcat 으로 옮긴다
+function glideStat(ts) {
+  if (!glide.statT) {   // 처음 한 번: 지도 캔버스 크기와 그리는 장치 이름(에뮬레이터가 소프트웨어로 그리는지)
+    try { const cv = document.querySelector('#map canvas'), gl = cv && (cv.getContext('webgl2') || cv.getContext('webgl')), ex = gl && gl.getExtension('WEBGL_debug_renderer_info');
+      const name = ex ? String(gl.getParameter(ex.UNMASKED_RENDERER_WEBGL)) : '?';
+      console.info(`[MAPT] gl ${name} canvas=${cv ? cv.width + 'x' + cv.height : '?'} dpr=${window.devicePixelRatio}`); } catch (e) { console.info('[MAPT] gl ? ' + e); }
+  }
+  if (!glide.statT) { glide.statT = ts; glide.frames = 0; glide.rafN = 0; glide.gapMax = 0; glide.tMark = glide.tTrim = glide.tCam = glide.drawMax = glide.ringMax = 0; glide.mapN = 0; return; }
+  const sec = (ts - glide.statT) / 1000, n = Math.max(1, glide.frames); if (sec < 10) return;
+  console.info(`[MAPT] glide${GLIDE.lab ? ' lab=' + Math.floor(glide.statN / 2) % GLIDE_LAB.length : ''} raf=${(glide.rafN / sec).toFixed(1)}/s step=${(glide.frames / sec).toFixed(1)}/s n=${glide.nStep} map=${(glide.mapN / sec).toFixed(1)}/s gapMax=${Math.round(glide.gapMax)}ms${glide.ff > 1 ? ' ff=' + glide.ff : ''} v=${glide.v.toFixed(1)}m/s k=${Number.isFinite(glide.k) ? glide.k.toFixed(2) : '-'} off=${(glide.offWant - glide.off).toFixed(0)}m z=${MapApi.getZoom ? MapApi.getZoom().toFixed(2) : '-'} js=${((glide.tMark + glide.tTrim + glide.tCam) / sec).toFixed(0)}ms/s (ms/step) mark=${(glide.tMark / n).toFixed(1)} trim=${(glide.tTrim / n).toFixed(1)} cam=${(glide.tCam / n).toFixed(1)} drawMax=${Math.round(glide.drawMax)}ms ringMax=${Math.round(glide.ringMax)}ms draw(new/moved/gone)=${layer.stat()} carDraw=${carDrawN}`); carDrawN = 0;
+  glide.statT = ts; glide.frames = 0; glide.rafN = 0; glide.gapMax = 0; glide.tMark = glide.tTrim = glide.tCam = glide.drawMax = glide.ringMax = 0; glide.mapN = 0; glide.statN++;
+}
+function glideStep(ts) {
+  glide.raf = 0;
+  if (!CAR || PREVIEW || !mapOn || !Number.isFinite(glide.off)) return;
+  glide.rafN++;
+  const cfg = GLIDE.lab ? GLIDE_LAB[Math.floor(glide.statN / 2) % GLIDE_LAB.length] : GLIDE;   // lab(재는 판): 20초마다 다음 설정
+  // 몇 장마다 한 번 그릴지(11-14 22시 고침). 전에는 "지난번에서 1000/fps ms 가 지났을 때만" 그렸는데, 화면 갱신이 fps 보다 조금만 빨라도(에뮬 초당 21장 · fps 20)
+  // 매번 한 장씩 건너뛰어 절반(초당 10번)이 됐다. 이제는 화면 갱신 간격을 재서(rafMs) 가장 가까운 고른 간격 — n장마다 한 번(n = 반올림(목표 간격 ÷ 갱신 간격), 1 이상).
+  // 갱신이 fps 의 1.5배보다 느리면 n = 1(매 장), 60장 화면이면 fps 20 → 3장마다, 12 → 5장마다. n 은 20장 내리 다른 값이 나와야 바꾼다(오락가락하지 않게)
+  const rg = ts - glide.rafLast; glide.rafLast = ts;
+  if (rg > 0 && rg < 250) glide.rafMs += (rg - glide.rafMs) * 0.1;
+  const nWant = Math.max(1, Math.round(1000 / cfg.fps / glide.rafMs));
+  if (nWant === glide.nStep) glide.nHold = 0; else if (++glide.nHold >= 20) { glide.nStep = nWant; glide.nHold = 0; }
+  if (++glide.nCnt >= glide.nStep) {
+    glide.nCnt = 0;
+    const gap = ts - glide.last, dt = Math.min(0.3, Math.max(0.001, gap / 1000)); glide.last = ts; glide.frames++; glide.gapMax = Math.max(glide.gapMax, gap);
+    glideAdvance(performance.now());
+    glideStat(ts);
+    const me = posAt(glide.s);
+    if (me) {
+      const want = headingAt(glide.s);
+      if (!Number.isFinite(glide.deg)) glide.deg = want;
+      glide.deg += ((((want - glide.deg) % 360) + 540) % 360 - 180) * (1 - Math.exp(-dt / GLIDE.tauDeg));
+      // 지도(가운데·줌)와 노선 자르기는 mapHz 번만 — 지도 한 번 그리기가 가장 무겁다. 같은 규칙: 걸음 m 번마다 한 번(mapHz 가 fps 이상이면 걸음마다)
+      const mEvery = cfg.mapHz >= cfg.fps ? 1 : Math.max(1, Math.round(1000 / cfg.mapHz / (glide.rafMs * glide.nStep)));
+      const p0 = performance.now(), mapNow = ++glide.mapCnt >= mEvery;
+      let dtMap = dt;
+      if (mapNow) {
+        glide.mapCnt = 0;
+        dtMap = Math.min(0.3, Math.max(0.001, (ts - glide.mapLast) / 1000)); glide.mapLast = ts; glide.mapN++;
+        if (!followPaused) glideCamera(me, dtMap); else { glide.cam = null; glide.cam1 = null; }   // 지도 먼저, 그다음 표식·노선(같은 지도 상태로)
+      }
+      const p1 = performance.now();
+      if (!glide.marker) glide.marker = meCursor(me, glide.s); else glide.marker.setLatLng(me);
+      const svg = document.getElementById('mecurSvg'); if (svg) svg.style.transform = `rotate(${glide.deg.toFixed(1)}deg)`;
+      const p2 = performance.now();
+      if (mapNow) { glide.dtAvg += (Math.max(dt, dtMap) - glide.dtAvg) * 0.2; trimRoute(glide.s); if (MapApi.overSync) MapApi.overSync(); }   // 실제 지도 간격(전에는 1/mapHz 로 어림)
+      const p3 = performance.now(); glide.tCam += p1 - p0; glide.tMark += p2 - p1; glide.tTrim += p3 - p2;
+    }
+  }
+  glide.raf = requestAnimationFrame(glideStep);
+}
+// 첫 화면(길 안내 없음)의 내 위치 표식: 숨 쉬는 옅은 후광 + 흰 테두리 파란 점(화살표 없음 — 점과 화살표는 다른 두 표식이라 겹쳐 그리지 않는다). 휴대폰 화면은 예전 퍽 그대로.
+// 후광은 표식 HTML 안의 CSS 애니메이션뿐(지도 도형을 다시 만들지 않는다). 3초마다 layer.clear() 로 표식을 새로 만들므로
+// 숨쉬기 시작 시각을 시계에 맞춘다(음수 지연) — 새로 만들어도 처음부터 다시 시작하지 않는다
+function mePuck(ll) {
+  const html = `<div class="meloc"><b style="animation-delay:-${Date.now() % 2000}ms"></b></div>`;
+  return MapApi.puck({latlng: ll, html, size: Math.round((MAPSCALE.base.dot + 2 * MAPSCALE.base.halo) * mapU), interactive: false, z: 1000});
+}
+// 진행 방향(도, 북쪽 0·시계 방향): 경로 위 s 에서 30 m 앞을 본다
+function headingAt(s) {
+  const a = posAt(s), b = posAt(s + 30);
+  if (!a || !b) return 0;
+  const y = (b[1] - a[1]) * Math.cos(a[0] * Math.PI / 180), x = b[0] - a[0];
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+// 함께 가기 주행 화면의 내 위치: 표식 자체가 화살촉 하나(파란 + 흰 테두리, 5° 단위로 진행 방향). 점·후광과 겹치지 않는다(상태마다 표식 하나 — 11-13 사용자)
+function meCursor(ll, s) {
+  const deg = Math.round(headingAt(s) / 5) * 5;
+  const html = `<div class="mecur"><b><svg id="mecurSvg" viewBox="0 0 52 52" style="transform:rotate(${deg}deg)"><path d="M26 5 44 45 26 36 8 45Z" fill="#fff" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg></b></div>`;
+  return MapApi.puck({latlng: ll, html, size: Math.round((MAPSCALE.base.cur + MAPSCALE.base.curPad) * mapU), interactive: false, z: 1000});
+}
+// 따라가기(차 화면, 첫 화면 포함): 내 차를 지도 한가운데에, 줌은 고정(CARMAP.zoom — 3초마다 줌이 출렁이지 않게). 왼쪽 위 판의 오른쪽 끝(여백 포함 약 450 CSS px)이
+// 지도 가운데(약 610)보다 왼쪽이라 어느 상태에서도 판이 표식을 가리지 않고, 주행 중엔 판이 한 줄 알약뿐이라 지도 가운데가 보이는 가운데다(11-13 사용자 "가운데가 아님").
+// 위험·긴급차량 안내 중(focus)에는 내 차와 그 지점이 둘 다 보이게 두 점을 넉넉한 여백으로 맞춘다. 손으로 지도를 옮긴 동안(followPaused)은 맞추지 않는다
+let lastMeS = NaN, lastFocus = null, followPaused = false, pauseTimer = 0;
+let userZoom = null;   // [+]·[−] 로 고른 줌(null = 기본 CARMAP.zoom). [내 위치]를 누르면 기본으로 돌아간다, 8초 뒤 저절로 돌아올 때는 그대로
+function follow(s, focus) {
+  const me = posAt(s);
+  if (!me) return false;
+  lastMeS = s; lastFocus = focus || null;
+  if (followPaused) return true;
+  // 안내 지점이 0.8~2.5 km 일 때만 두 점 맞춤 — 더 멀면 줌이 크게 빠져 지도가 출렁이고 타일이 비었다(11-14 녹화 v1), 더 가까우면 최대 줌으로 확 당겨져
+  // 가운데 따라가기(줌 15, 앞뒤 약 1 km 보임)와 번갈아 튀었다(v6 구급차 300 m 안). 그 밖은 거리는 판이 말해 주고 지도는 가운데 따라가기
+  const fd = focus ? geoDist(me, focus) : Infinity;
+  if (focus && fd >= CARMAP.focusMinM && fd <= CARMAP.focusNearM) {
+    const f = CARMAP.focusPad;
+    MapApi.fit([me, focus], {left: PADL + f.extraLeft, top: f.top, right: f.right, bottom: f.bottom, maxZoom: CARMAP.maxZoom});
+    return true;
+  }
+  MapApi.setView(me, userZoom ?? CARMAP.zoom);   // [+]·[−] 로 고른 줌이 있으면 그 줌으로 따라간다(따라가기는 멈추지 않는다)
+  gaugeSync();
+  return true;
+}
+// 손으로 지도를 끌거나 확대·축소하면 따라가기를 멈추고 [내 위치] 를 보인다. 8초 동안 손대지 않으면 저절로 돌아온다(주행 중 조작을 줄인다).
+// 프로그램이 지도를 옮길 때는 지도 이벤트가 아니라 손가락·휠 입력(DOM)으로만 알아채므로 맞춤 이동을 손으로 옮김으로 잘못 보지 않는다
+const GAUGE_MS = 3000;   // 게이지가 남아 있는 시간(손을 뗀 뒤)
+const ZOOMG = { min: 11, max: 18 };   // 게이지 범위(Leaflet 줌 단위): 11 = 시 전체, 18 = 골목. 기본 따라가기 줌 CARMAP.zoom(15)
+// 기본 줌: 첫 화면·주행 모두 15(주변 가로 약 2 km). 주행 줌 16 도 재 봤다(화면 이동 두 배) — 위험 안내의 두 점 맞춤이 타일 단계를 넘나들어 에뮬레이터에서 지도가 회색으로 비어 15 로 되돌렸다(11-14). CARMAP.driveZoom 한 값
+const baseZoom = () => PREVIEW ? CARMAP.zoom : CARMAP.driveZoom;
+function gaugeSync() {
+  const zg = document.getElementById('zoomg');
+  if (!CAR || !zg || zg.hidden || !mapOn || !MapApi.getZoom) return;
+  const z = MapApi.getZoom(), tr = zg.querySelector('.ztrack'), h = tr.clientHeight, k = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--zg-knob')) || 13;
+  const pos = v => Math.round((1 - (Math.min(ZOOMG.max, Math.max(ZOOMG.min, v)) - ZOOMG.min) / (ZOOMG.max - ZOOMG.min)) * (h - k));
+  tr.querySelector('i').style.top = pos(z) + 'px';
+  tr.querySelector('b').style.top = (pos(baseZoom()) + k / 2 - 1) + 'px';
+  document.getElementById('zin').classList.toggle('end', z >= ZOOMG.max - 0.01);
+  document.getElementById('zout').classList.toggle('end', z <= ZOOMG.min + 0.01);
+}
+const recBtn = document.getElementById('recenter');
+function pauseFollow() {
+  camStop();
+  if (!CAR || !(Number.isFinite(lastMeS) || hereLL)) return;
+  followPaused = true; recBtn.hidden = false;
+  clearTimeout(pauseTimer); pauseTimer = setTimeout(resumeFollow, CARMAP.pauseMs);
+}
+function resumeFollow() {
+  clearTimeout(pauseTimer);
+  if (!followPaused) return;
+  followPaused = false; recBtn.hidden = true;
+  if (HERE_ON && PREVIEW) { routeView = false; const at = hereAnim.cur || hereLL; if (at) camTo(at, userZoom ?? CARMAP.zoom, 900); return; }   // 경로 전체 보기에서 내 위치로도 미끄러져
+  if (!PREVIEW && Number.isFinite(glide.s)) { const c = MapApi.getCenter ? MapApi.getCenter() : null; glide.cam = c; glide.zoom = MapApi.getZoom(); glide.cam1 = null; glideQuickUntil = performance.now() + GLIDE.quickMs; return; }   // 지금 화면에서부터 빨리 미끄러져 돌아온다
+  if (Number.isFinite(lastMeS)) follow(lastMeS, lastFocus);
+}
+if (CAR) {
+  document.getElementById('recenterText').textContent = T('내 위치', 'My location');
+  // 자리(11-14 밤): 오른쪽 아래 [응급] 십자 원(앱 Compose — 오른쪽·아래 여백 15 dp, 닿는 자리 96 × 96 dp, 보이는 지름 67 dp) 위. 게이지는 그 원의 가운데 세로줄(오른쪽에서 63 dp)에,
+  // [내 위치] 알약은 글자가 있어 그 줄에 가운데를 두면 화면 밖으로 나가므로 오른쪽 끝을 원의 보이는 오른쪽 끝(29.5 dp)에 맞춘다. 예전엔 긴 [응급] 알약(여백 35.84 dp)에 맞춘 값이라 게이지가 원보다 37 px 왼쪽에 있었다.
+  // dp → CSS px: 앱이 padl 을 기기 화소(640 dp × density)로 넘기므로 density = padl/640, CSS px = 기기 화소 / devicePixelRatio
+  const dpCss = (+qs.get('padl') || 640) / 640 / (window.devicePixelRatio || 1);
+  const EMG = { margin: 15, hit: 96, dia: 67, gap: 16 };   // 응급 원 치수(dp)와 [내 위치] 알약까지의 틈
+  recBtn.style.right = Math.round((EMG.margin + (EMG.hit - EMG.dia) / 2) * dpCss) + 'px';
+  recBtn.style.bottom = Math.round((EMG.margin + (EMG.hit + EMG.dia) / 2 + EMG.gap) * dpCss - 18) + 'px';   // 닿는 높이 96 안에서 보이는 알약(60)은 위아래 18 씩 안쪽
+  recBtn.addEventListener('click', () => { userZoom = null; if (!followPaused && routeView) followPaused = true; resumeFollow(); });   // 경로 전체 보기 중에도 [내 위치]   // [내 위치] = 위치와 기본 줌으로(11-14 결정)
+  // 확대·축소 게이지: [내 위치] 알약 자리(닿는 높이 96) 바로 위. 지도 줌 한 단계씩, 끝값에선 아무 일 없다. 따라가는 중이면 따라가기를 멈추지 않고 줌만 바꾼다
+  const zg = document.getElementById('zoomg'), zin = document.getElementById('zin'), zout = document.getElementById('zout');
+  zin.setAttribute('aria-label', T('지도 확대', 'Zoom in')); zout.setAttribute('aria-label', T('지도 축소', 'Zoom out'));
+  zg.style.right = Math.max(0, Math.round((EMG.margin + EMG.hit / 2) * dpCss - 40)) + 'px'; zg.style.bottom = (parseFloat(recBtn.style.bottom) + 96 + 4) + 'px';   // 닿는 자리 80(가운데 40)을 응급 원의 가운데 세로줄에
+  // 평소엔 숨김. 지도를 만지면(누름·끌기·두 손가락·휠) 나타나고, 손을 뗀 뒤 GAUGE_MS 동안 아무것도 안 하면 사라진다. [+]·[−] 를 누르는 동안은 남는다
+  zg.hidden = true; zg.style.opacity = '0';
+  let zgTimer = 0, zgFade = 0, zgO = 0;
+  const gaugeFade = to => {
+    clearInterval(zgFade);
+    if (to > 0) { zg.hidden = false; gaugeSync(); }
+    const from = zgO; let n = 0;
+    zgFade = setInterval(() => { n++; zgO = n >= 5 ? to : from + (to - from) * n / 5; zg.style.opacity = zgO.toFixed(2); if (n >= 5) { clearInterval(zgFade); if (to === 0) zg.hidden = true; } }, 36);
+  };
+  const gaugeShow = () => { clearTimeout(zgTimer); if (zgO < 1) gaugeFade(1); zgTimer = setTimeout(() => gaugeFade(0), GAUGE_MS); };
+  window.gaugeShow = gaugeShow;   // 시험·다른 자리에서 부를 수 있게
+  const zoomBy = d => {
+    if (!mapOn || !MapApi.getZoom) return;
+    camStop();
+    const now = followPaused || !Number.isFinite(lastMeS) ? Math.round(MapApi.getZoom()) : (userZoom ?? baseZoom());
+    const z = Math.max(ZOOMG.min, Math.min(ZOOMG.max, now + d));
+    if (z === now) { gaugeSync(); return; }
+    userZoom = z;
+    if (!PREVIEW && Number.isFinite(glide.s) && !followPaused) glideQuickUntil = performance.now() + GLIDE.quickMs;   // glide 카메라가 다음 화면부터 이 줌으로 빨리 간다
+    else if (!followPaused && Number.isFinite(lastMeS)) follow(lastMeS, lastFocus); else MapApi.setZoom(z);
+    gaugeSync();
+  };
+  zin.addEventListener('click', () => { gaugeShow(); zoomBy(1); }); zout.addEventListener('click', () => { gaugeShow(); zoomBy(-1); });
+  setInterval(gaugeSync, 700);   // 핀치·두 점 맞춤으로 바뀐 줌도 눈금에 따라온다
+
+  const mapEl = document.getElementById('map');
+  const downs = new Map();
+  mapEl.addEventListener('pointerdown', e => { downs.set(e.pointerId, [e.clientX, e.clientY]); gaugeShow(); if (downs.size > 1) pauseFollow(); }, true);   // 두 손가락 = 확대·축소
+  mapEl.addEventListener('pointermove', e => {
+    const d = downs.get(e.pointerId);
+    if (d && Math.hypot(e.clientX - d[0], e.clientY - d[1]) > 12) { downs.set(e.pointerId, [e.clientX, e.clientY]); gaugeShow(); pauseFollow(); }   // 끄는 동안 계속 8초를 다시 센다
+  }, true);
+  const up = e => { downs.delete(e.pointerId); gaugeShow(); };   // 손을 뗀 때부터 3초
+  mapEl.addEventListener('pointerup', up, true); mapEl.addEventListener('pointercancel', up, true);
+  mapEl.addEventListener('wheel', () => { gaugeShow(); pauseFollow(); }, {capture: true, passive: true});
+  mapEl.addEventListener('dblclick', () => { gaugeShow(); pauseFollow(); }, true);
+}
+
+// 다른 차·일행 차 표식(11-15, 사용자 "일반차 일행차 다시 표기하는 시간이 너무 길다 조금 촘촘하게 해봐"): 보기(view)는 3초마다 받지만,
+// 차 화면은 내 자리를 0.8~1.3초마다 묻는 요청(posPoll)이 모든 차의 자리(world)를 같이 받아 온다 — 그 값으로 표식만 다시 옮긴다(carsOnly).
+// 요청은 늘지 않는다. 위험 표지·판·음성·따라가기는 그대로 3초 보기를 따른다. 일행 차는 world 에 자리가 있으면 그 값을, 없으면(휴대폰 일행) 보기의 자리를 쓴다.
+let world = null, drawV = null, carDrawN = 0;
+function draw(v, carsOnly) {
   if (!mapOn) return;
-  layer.clear();
+  if (!carsOnly) drawV = v;
+  carDrawN++;
+  layer.begin();
+  const d0 = performance.now();
   const pts = [];
   // 지도 라벨(.tag): 퍽 옆에 늘 보이는 이름. Leaflet 툴팁 기본 불투명도 .9 그대로
-  const tag = (ll, html, dx, dy) => layer.add(MapApi.label({latlng: ll, html, dx, dy, cls: 'tag', opacity: .9}));
+  const tag = (id, ll, html, dx, dy, side) => layer.add(`t|${id}|${html}|${dx}|${dy}|${side ? 1 : 0}`, ll, () => MapApi.label({latlng: ll, html, dx, dy, cls: side ? 'tag side' : 'tag', opacity: side ? .8 : .9}));
   // 주변 길벗 차(익명): 작은 점 — 차대차 링크로 이어진 차들
   const mine = new Set(((v.group || {}).members || []).map(m => m.id));
   for (const c of (world && world.cars) || []) {
     if (c.me || mine.has(c.id) || !c.s) continue;
     const pos = posAt(c.s); if (!pos) continue;
-    layer.add(MapApi.dot({latlng: pos, radius: CAR ? 6 : 4, color: '#fff', weight: 2, fillColor: c.stopped ? '#f62e24' : c.kmh < 40 ? '#ff8a00' : '#64748b', fillOpacity: 1}));
+    const fill = c.stopped ? '#f62e24' : c.kmh < 40 ? '#ff8a00' : '#64748b';
+    layer.add(`d|${c.id}|${fill}`, pos, () => MapApi.dot({latlng: pos, radius: CAR ? 6 : 4, color: '#fff', weight: 2, fillColor: fill, fillOpacity: 1}));
   }
-  const incS = v.hazards.filter(h => h.type === 'INCIDENT').map(h => h.s);
+  // 방향 구분: side 가 있는 위험(맞은편·방향 불확실)은 낮은 단계 — 이름표 우선순위·번짐 고리·두 점 맞춤·화면 맞춤에서 빼고, 겹침 줄이기에서는 늘 내 쪽 위험 뒤에 둔다(내 쪽 위험을 가리지 않게)
+  const incS = v.hazards.filter(h => h.type === 'INCIDENT' && !h.side).map(h => h.s);
   // 이름표는 내 앞 가까운 위험 둘만(긴급차량은 늘) — 나머지는 아이콘만
-  const named = new Set(v.hazards.filter(h => h.ahead != null && h.ahead > 0).slice(0, 2).map(h => h.id));   // 사고 의심 300m 안의 급제동 이름표는 생략(같은 자리에 겹쳐 잘려 보인다)
+  const named = new Set(v.hazards.filter(h => !h.side && h.ahead != null && h.ahead > 0).slice(0, 2).map(h => h.id));
+  const sideNamed = new Set(v.hazards.filter(h => h.side && h.ahead != null && h.ahead > 0).slice(0, 2).map(h => h.id));   // 낮은 단계 이름표도 가까운 둘만   // 사고 의심 300m 안의 급제동 이름표는 생략(같은 자리에 겹쳐 잘려 보인다)
   // 겹침 줄이기: 지나간 위험(300m 넘게 뒤)은 그리지 않고, 경로 위 HZ_GAP 안에 모인 위험은 급한 것 하나만(긴급차량은 늘). 급한 순 = 이름표 둘 → 확정 → 경고 → 주의 → 정보, 같으면 가까운 것(확정되지 않은 후보가 확정된 위험을 가리지 않게)
   const HZ_GAP = 400, PRI = {warn: 0, caution: 1, info: 2};
   const order = v.hazards.filter(h => HZ[h.type] && h.pos && (h.type === 'SIREN' || h.ahead == null || h.ahead > -300))
-    .sort((a, b) => (named.has(b.id) - named.has(a.id)) || (!!b.confirmed - !!a.confirmed) || (PRI[HZ[a.type].lv] - PRI[HZ[b.type].lv]) || ((a.ahead ?? 1e9) - (b.ahead ?? 1e9)));
+    .sort((a, b) => (!!a.side - !!b.side) || (named.has(b.id) - named.has(a.id)) || (!!b.confirmed - !!a.confirmed) || (PRI[HZ[a.type].lv] - PRI[HZ[b.type].lv]) || ((a.ahead ?? 1e9) - (b.ahead ?? 1e9)));
+  // 차 앱(지도 우선 화면): 지금 안내 중인 위험(앱 머리와 같은 고르기 — 말할 것이 있는 사고 의심·막힘·급제동·낙하물 중 첫째)에 번짐 고리. 3초마다 다시 그려도 숨쉬기 위상이 이어지게 시작 시각을 맞춘다
+  const topHz = CAR && !PREVIEW && !v.hazards.some(h => h.say && h.type === 'SIREN') ? v.hazards.find(h => h.say && !h.side && h.pos && ['INCIDENT', 'BLOCKED', 'HARD_BRAKE', 'DEBRIS'].includes(h.type)) : null;
+  ringAt = topHz ? topHz.pos : null;
+  // 따라가기의 두 점 맞춤 대상: 지금 안내 중인 위험(번짐 고리) 또는 말하는 긴급차량. 새 안내가 뜨면 손으로 옮긴 상태여도 바로 돌아온다(안내가 우선)
+  const sirenSay = CAR && !PREVIEW ? v.hazards.find(h => h.say && !h.side && h.type === 'SIREN' && h.pos) : null;
+  const focusHz = topHz || sirenSay || null;
+  const focusKey = focusHz ? focusHz.type + ':' + focusHz.id : '';
+  if (focusKey && focusKey !== lastFocusKey && followPaused) resumeFollow();
+  lastFocusKey = focusKey;
   const keptS = [];
   const plate = CAR ? 48 : 36;
   for (const h of order) {
     const k = HZ[h.type];
     if (h.type !== 'SIREN' && h.s != null && keptS.some(s => Math.abs(s - h.s) < HZ_GAP)) continue;
     if (h.s != null) keptS.push(h.s);
-    const shadowed = h.type === 'HARD_BRAKE' && incS.some(s => Math.abs(s - h.s) <= 300);
-    layer.add(MapApi.puck({latlng: h.pos, html: `<img class="hzs ${h.confirmed ? '' : 'cand'}" src="${HZIMG[h.flood ? 'rain' : k.g]}" alt="">`, size: plate, interactive: false, z: named.has(h.id) ? 600 : 500}));
+    const shadowed = !h.side && h.type === 'HARD_BRAKE' && incS.some(s => Math.abs(s - h.s) <= 300);
+    const hz = h.side ? 400 : named.has(h.id) ? 600 : 500, hg = h.flood ? 'rain' : k.g;
+    layer.add(`h|${h.type}|${h.id}|${hg}|${h.confirmed ? 1 : 0}|${hz}|${h.side || ''}`, h.pos, () => MapApi.puck({latlng: h.pos, html: `<img class="hzs ${h.side ? 'side' : h.confirmed ? '' : 'cand'}" src="${HZIMG[hg]}" alt="">`, size: plate, interactive: false, z: hz}));
+    if (h.side) {   // 낮은 단계: 허브가 준 한 줄("맞은편 · 급제동 1.2km")을 옅은 이름표로. 없으면 뜻 + 종류
+      if (sideNamed.has(h.id)) tag('h' + h.type + h.id, h.pos, esc(h.note || `${SIDE_NAME[h.side] ? T(SIDE_NAME[h.side].ko, SIDE_NAME[h.side].en) : ''} · ${T(k.ko, k.en)}`), plate / 2 + 2, 0, true);
+      continue;   // 화면 맞춤(휴대폰)에도 넣지 않는다
+    }
     if (!shadowed && (named.has(h.id) || h.type === 'SIREN'))   // 표지 오른쪽
-      tag(h.pos, `${hzName(h)}${h.cars > 1 ? ' · ' + T(`${h.cars}대`, `${h.cars} cars`) : ''}`, plate / 2 + 2, 0);
+      tag('h' + h.type + h.id, h.pos, `${hzName(h)}${h.cars > 1 ? ' · ' + T(`${h.cars}대`, `${h.cars} cars`) : ''}`, plate / 2 + 2, 0);
     if (h.ahead == null || (h.ahead > -2000 && h.ahead < 12000)) pts.push(h.pos);
   }
+  const wS = new Map(((world && world.cars) || []).filter(c => c.s).map(c => [c.id, c.s]));
   for (const m of ((v.group || {}).members || [])) {
     if (!m.pos) continue;
+    const mp = (!m.me && wS.has(m.id) && posAt(wS.get(m.id))) || m.pos;   // 일행 차: 더 새 자리(world)가 있으면 그것
     const cls = m.me ? 'me' : m.kind === 'web' ? 'web' : '';
-    layer.add(MapApi.puck({latlng: m.pos, html: `<div class="carpin ${cls}">${icon(m.me ? 'navigation' : 'car', '')}</div>`, size: CAR ? 44 : 34, interactive: false, z: m.me ? 1000 : 800}));
-    if (!m.me) tag(m.pos, esc(m.name), 0, -16);   // 퍽 위(내 차는 커서로 충분 — 라벨이 위험 표지판과 겹쳤다)
-    pts.push(m.pos);
+    if (m.me && CAR && !PREVIEW && v.s != null) { /* 내 표식은 glide 가 그린다(새로 만들지 않고 옮긴다) */ }
+    else layer.add(`m|${m.id}|${cls}`, mp, () => MapApi.puck({latlng: mp, html: `<div class="carpin ${cls}">${icon(m.me ? 'navigation' : 'car', '')}</div>`, size: CAR ? 44 : 34, interactive: false, z: m.me ? 1000 : 800}));
+    if (!m.me) tag('m' + m.id, mp, esc(m.name), 0, -16);   // 퍽 위(내 차는 커서로 충분 — 라벨이 위험 표지판과 겹쳤다)
+    pts.push(mp);
   }
   const rest = (v.group || {}).rest;
   if (rest && rest.pos && !rest.none) pts.push(rest.pos);
   if (!v.group && v.s != null) { const p = posAt(v.s); if (p) { pts.push(p);
-    layer.add(MapApi.puck({latlng: p, html: `<div class="carpin me">${icon('navigation', '')}</div>`, size: CAR ? 44 : 34, interactive: false, z: 1000})); } }
+    if (!(CAR && !PREVIEW)) layer.add('me', p, () => MapApi.puck({latlng: p, html: `<div class="carpin me">${icon('navigation', '')}</div>`, size: CAR ? 44 : 34, interactive: false, z: 1000})); } }
   // 일행과 앞쪽 위험이 다 보이게(10초마다만 다시 맞춘다 — 지도가 계속 움직이지 않게)
-  if (pts.length && Date.now() - lastFit > 10000) {
-    lastFit = Date.now();
-    MapApi.fit(pts, {pad: .25, maxZoom: 14});
+  if (carsOnly) { /* 표식만 다시 옮김 — 내 자리 먹이기·화면 맞춤은 3초 보기 때만 */ }
+  else if (CAR && !PREVIEW && v.s != null) {   // 차 화면: 표식·지도·노선 시작점은 glide 가 화면 갱신마다 옮긴다
+    lastMeS = v.s; lastFocus = (focusHz && focusHz.pos) || null;
+    const mine = ((world && world.cars) || []).find(c => c.me);
+    glideFeed(v.s, mine && Number.isFinite(mine.kmh) ? mine.kmh : NaN);
+    if (!posTimer) posTimer = setTimeout(() => posPoll(pollGen), GLIDE.posMs[0]);
   }
+  else if (pts.length && Date.now() - lastFit > 10000) {
+    lastFit = Date.now();
+    MapApi.fit(pts, {pad: .25, maxZoom: 14, left: PADL});
+  }
+  layer.end();
+  ringPaint();   // 맞춤(줌 변경) 뒤에 — 줌이 바뀌었으면 고리 크기도 다시
+  glide.drawMax = Math.max(glide.drawMax, performance.now() - d0);
 }
 
 // ---------------------------------------------------------------- 다음 한 단계 카드(동승자 휴대폰)
@@ -709,7 +1502,7 @@ function panel(v) {
   // 동승(ADR-47): seenFrom = 이 보기의 기준 차(내가 탄 차). 그 차와의 거리 대신 '타고 있는 차', 내 줄에는 '○○ 차에 동승'
   const sf = v.seenFrom;
   const rows = v.members.map(m => `<div class="row ${m.me ? 'me' : ''}">${icon('car')}<b>${esc(m.name)}</b>
-     <span class="d">${m.me && sf ? T(`${esc(sf.name)} 차에 동승`, `riding in ${esc(sf.name)}'s car`) : (m.car ? esc(m.car) + '<br>' : '') + (sf && m.id === sf.id ? T('타고 있는 차', 'my ride') : m.me || m.gap == null ? '' : km(m.gap) + ' ' + (m.gap > 0 ? T('앞', 'ahead') : T('뒤', 'behind')))}${m.soc != null ? ' · ' + T('배터리', 'battery') + ' ' + m.soc + '%' : ''}</span></div>`).join('');
+     <span class="d">${m.me && sf ? T(`${esc(sf.name)} 차에 동승`, `riding in ${esc(sf.name)}'s car`) : (m.car ? esc(m.car) + '<br>' : '') + (sf && m.id === sf.id ? T('타고 있는 차', 'my ride') : m.me || m.gap == null ? '' : km(m.gap) + ' ' + (m.gap > 0 ? T('앞', 'ahead') : T('뒤', 'behind')))}${m.soc != null ? ' · ' + T('배터리', 'battery') + ' ' + m.soc + '%' : ''}${m.park ? `<br><b class="park">${icon('parking')} ${T('주차', 'Parked')} ${esc(m.park)}</b>` : ''}</span></div>`).join('');   // 주차 글: 차가 기어 P 로 기록한 층·기둥(좌표 없음) — 돌아올 때 휴대폰에서 다시 본다
   // 위치: 동승이면 필요 없음. 따로 가는데 HTTP 주소(시연)면 휴대폰 브라우저가 위치를 막는다 → 버튼 대신 사실대로 알리고, 탄 차를 고르는 칩을 준다
   const rideHere = !sf && !((g.steps || []).length) && v.members.length > 1 ? `<p class="hint">${T('일행 차에 타고 있다면 그 차를 고르세요 · 그 차 화면과 같은 안내가 와요', 'Riding in a family car? Pick it to get the same alerts as that car')}<br>${v.members.filter(m => !m.me).map(m =>
     `<button class="chip" onclick="journeyRide(${esc(JSON.stringify(m.id))})">${icon('car')} ${esc(m.name)}</button>`).join('')}</p>` : '';
@@ -720,6 +1513,9 @@ function panel(v) {
   document.getElementById('panel').innerHTML = (GID !== 'road' && g.id ? stepsCard(g) : '') + `<div class="card">${rows}${rest}
     ${locate}
     <button class="ghost" onclick="restStop()">${icon('cafe')} ${T('다같이 휴게소 들르자', 'Everyone stop at the next rest area')}</button>
+    ${GID !== 'road' && g.id ? `<button class="ghost" onclick="document.getElementById('pk').click()">${icon('pin')} ${T('주차 기둥 사진 보내기', 'Send a pillar photo')}</button>
+    <input id="pk" type="file" accept="image/*" capture="environment" hidden onchange="parkPhoto(this)">
+    <p class="hint" id="parkmsg">${T('차가 글자만 읽고 사진은 바로 지워요 · 주차한 뒤에 찍으세요', 'The car reads the text only and deletes the photo · take it after parking')}</p>` : ''}
     <p class="hint">${v.restNext ? T(`다음 ${esc(v.restNext.name)}까지 ${km(v.restNext.dist)}`, `Next stop ${esc(v.restNext.name)} in ${km(v.restNext.dist)}`) : ''}</p>
     <p class="hint">${T('위치는 그룹 안에서만 공유돼요 · 운전 중에는 만지지 마세요', 'Location stays in this group · don’t use while driving')}</p></div>
     <div class="log">${v.log.map(l => esc(l.text)).join('\n')}</div>`;
@@ -728,23 +1524,28 @@ function panel(v) {
 function joinForm() {
   document.getElementById('sub').textContent = T('가족이 함께 가기에 초대했어요', 'Your family invited you to a group drive');
   document.getElementById('panel').innerHTML = `<div class="card">
+    <p class="hint" id="privnote">${T('위치는 이 그룹 안에서만 보입니다', 'Your location is shown only inside this group')}<br>${T('연결 서버는 메모리에만 두고 저장하지 않습니다 · 서버를 다시 켜면 사라져요', 'The link server keeps it only in memory and does not store it · it is gone when the server restarts')}</p>
+    <label class="hint" style="display:flex;gap:10px;align-items:center"><input type="checkbox" id="agree" style="width:22px;height:22px;margin:0" onchange="joinAgree()"> ${T('위 내용에 동의하고 합류해요', 'I agree and want to join')}</label>
     <input id="nm" placeholder="${T('이름 (예: 이모)', 'Your name')}">
     <input id="code" placeholder="${T('코드 4자리', '4-digit code')}" value="${esc(qs.get('code') || '')}" inputmode="numeric">
-    <button class="primary" onclick="join(true)">${T('합류 · 이 차에 같이 타요', 'Join · I am riding in this car')}</button>
+    <button class="primary joinbtn" disabled style="opacity:.45" onclick="join(true)">${T('합류 · 이 차에 같이 타요', 'Join · I am riding in this car')}</button>
     <p class="hint">${T('같이 타면 위치 없이 그 차 화면과 같은 안내를 받아요', 'Riding along: same alerts as that car, no location needed')}</p>
     <input id="car" placeholder="${T('따로 갈 때 내 차 (예: 쏘렌토 · 검정)', 'Driving separately: your car')}">
-    <button class="ghost" onclick="join(false)">${T('합류 · 내 차로 따로 가요', 'Join · I am driving separately')}</button>
+    <button class="ghost joinbtn" disabled style="opacity:.45" onclick="join(false)">${T('합류 · 내 차로 따로 가요', 'Join · I am driving separately')}</button>
     <p class="hint">${T('Pleos 차가 아니어도 휴대폰으로 함께 가요 · 위치는 그룹 안에서만', 'Join from your phone · location stays in this group')}</p></div>`;
 }
 
+// 합류 동의(11-15, 매니패스트 F-LXSYDK): 고지 두 줄에 동의를 체크해야 합류 단추가 눌린다. 서버 API 는 그대로(두 허브 대조 유지)
+function joinAgree() { const on = document.getElementById('agree').checked; document.querySelectorAll('.joinbtn').forEach(b => { b.disabled = !on; b.style.opacity = on ? '' : '0.45'; }); }
 async function join(ride) {
+  if (!document.getElementById('agree') || !document.getElementById('agree').checked) return;
   const r = await api('POST', '/api/link/join', {code: document.getElementById('code').value.trim(), name: document.getElementById('nm').value.trim(),
     car: ride ? '' : document.getElementById('car').value.trim(), kind: 'web', ride: !!ride}).catch(e => ({error: e.message}));
   // 서버: 404 코드가 틀림·만료, 429 여러 번 틀려 잠시 잠김(60초), 503 도로가 꽉 참
   if (!r || r.error) { alert(r && r.error === '429' ? T('여러 번 틀렸어요. 1분 뒤에 다시 넣어 주세요', 'Too many tries. Try again in a minute')
     : r && r.error === '503' ? T('지금은 합류할 수 없어요. 잠시 뒤에 다시 해 주세요', 'Can’t join right now. Try again shortly')
     : T('코드를 확인해 주세요 (코드는 30분 동안 쓸 수 있어요)', 'Check the code (codes last 30 minutes)')); return; }
-  ME = r.me; localStorage.setItem('tago_me_' + GID, ME); update(r.view); setTimeout(poll, 3000);
+  ME = r.me; localStorage.setItem('gb_me_' + GID, ME); update(r.view); setTimeout(poll, 3000);
 }
 
 function shareLocation() {
@@ -753,6 +1554,26 @@ function shareLocation() {
     speed: p.coords.speed || 0}).then(update), () => alert(T('위치 권한이 필요해요', 'Location permission needed')));
 }
 const restStop = () => api('POST', `/api/link/${GID}/rest`, {me: ME}).then(update);
+// 주차 기둥 사진(새 기능 H): 사진을 작게 줄여(긴 변 640px 이하, JPEG, 요청 본문 64KB 안) 그룹의 차에 한 장 보낸다. 서버는 5분만 메모리에 두고 차가 가져가면 지운다
+async function parkPhoto(inp) {
+  const f = inp.files && inp.files[0]; inp.value = '';
+  const msg = document.getElementById('parkmsg'); if (!f || !msg) return;
+  try {
+    const bmp = await createImageBitmap(f);
+    let w = 640, q = 0.6, b64 = '';
+    for (let i = 0; i < 8; i++) {
+      const sc = Math.min(1, w / Math.max(bmp.width, bmp.height)), c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(bmp.width * sc)); c.height = Math.max(1, Math.round(bmp.height * sc));
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      b64 = c.toDataURL('image/jpeg', q).split(',')[1];
+      if (b64.length <= 58000) break;
+      w = Math.round(w * 0.8); q = Math.max(0.35, q - 0.08);
+    }
+    if (b64.length > 58000) throw new Error('size');
+    await api('POST', `/api/link/${GID}/parkphoto`, {me: ME, img: b64});
+    msg.textContent = T('차로 보냈어요 · 차가 글자를 읽으면 사진은 지워져요', 'Sent to the car · the photo is deleted after it reads the text');
+  } catch (e) { msg.textContent = T('사진을 보내지 못했어요. 다시 찍어 주세요', 'Could not send the photo. Try again'); }
+}
 const answer = yes => api('POST', `/api/link/${GID}/rest/answer`, {me: ME, yes}).then(update);
 
 function update(v) {
@@ -760,16 +1581,69 @@ function update(v) {
   draw(v); panel(v);
 }
 
-async function poll() {
+let lastOk = Date.now();   // 마지막으로 서버 응답을 받은 시각
+function staleBar(show) {
+  let b = document.getElementById('stalebar');
+  if (!b) { b = document.createElement('div'); b.id = 'stalebar'; b.className = 'stale-bar'; b.setAttribute('role', 'alert'); document.body.appendChild(b); }
+  if (show) { const s = Math.round((Date.now() - lastOk) / 1000); b.textContent = T(`서버 연결이 끊겼어요 · 마지막 정보는 ${s}초 전이에요`, `Connection lost · last update ${s} s ago`); }
+  b.style.display = show ? 'block' : 'none';
+}
+let pollGen = 0, pollTimer = 0;
+async function poll(gen = pollGen) {
   try {
     if (!routeDrawn) await drawRoute();
     if (PREVIEW) return;
     if (!ME && !CAR) { joinForm(); return; }
     const [v, w] = await Promise.all([api('GET', VIEW(ME)), CAR ? api('GET', `/api/road/world?me=${encodeURIComponent(ME)}`) : Promise.resolve(null)]);
+    if (gen !== pollGen) return;   // 그사이 제자리 전환됨 — 낡은 보기를 그리지 않는다
     world = w; update(v);
-  } catch (e) { document.getElementById('sub').textContent = T('연결 중…', 'Connecting…'); }
-  finally { if (!PREVIEW && (ME || CAR)) setTimeout(poll, 3000); }   // 차 화면도 3초: 화면 합성 부담을 줄인다
+    lastOk = Date.now(); staleBar(false);
+  } catch (e) { document.getElementById('sub').textContent = T('연결 중…', 'Connecting…'); if (!PREVIEW && Date.now() - lastOk > 10000) staleBar(true); }
+  finally { if (gen === pollGen && !PREVIEW && (ME || CAR)) pollTimer = setTimeout(() => poll(gen), 3000); }   // 차 화면도 3초: 화면 합성 부담을 줄인다
 }
+// 차 앱이 지도 주소를 바꿀 때(첫 화면 ↔ 함께 가기 ↔ 가족 그룹) 페이지를 다시 열지 않고 상태만 바꾼다 — 지도·TMAP 스크립트·타일·노선을 그대로 둔다.
+// 차 화면이 아니거나 주/야간·판 여백·노선 색이 다르면 false(앱이 예전처럼 다시 연다)
+window.linkGo = url => {
+  try {
+    if (!CAR || !routeDrawn) return false;
+    const u = new URL(url, location.href), q = u.searchParams;
+    if (q.get('car') !== '1' || !u.pathname.startsWith('/link/')) return false;
+    if (['dark', 'padl', 'route'].some(k => (q.get(k) || '') !== (qs.get(k) || ''))) return false;
+    const rvChanged = (q.get('rv') || '') !== (qs.get('rv') || '');   // rv = 허브 경로 판 번호(B-107): 바뀌면 경로(/api/road/route)만 다시 읽어 그린다 — 페이지는 다시 열지 않는다
+    history.replaceState(null, '', u.pathname + u.search);
+    qs = q;
+    GID = u.pathname.split('/').filter(Boolean)[1] || 'road';
+    PREVIEW = q.get('preview') === '1';
+    START_S = PREVIEW && q.get('s') != null && q.get('s') !== '' ? +q.get('s') : NaN;
+    ME = PREVIEW ? '' : q.get('me') || '';
+    DEST = parseDest(q);
+    HERE_ON = q.get('here') === '1';
+    PADL = padCss(q);
+    // 화면 상태 비우기: 표식·잘라 둔 노선·고리·따라가기 멈춤
+    pollGen++; clearTimeout(pollTimer); camStop();
+    const gen = pollGen;
+    layer.clear();
+    glideReset();
+    ringAt = null; ringPaint(); lastFocusKey = '';
+    followPaused = false; recBtn.hidden = true; clearTimeout(pauseTimer); lastMeS = NaN; lastFocus = null; lastFit = 0;
+    staleBar(false); lastOk = Date.now();
+    const redraw = () => {
+      if (gen !== pollGen) return;   // 그사이 또 전환됨
+      clearDemoGeometry();   // 잘라 둔 노선·지운 구역 선을 처음 모습으로(경로가 바뀌었으면 새 경로로)
+      if (!PREVIEW || !HERE_ON) { hereClear(); drawDemoGeometry(); }   // 실제 위치 모드의 첫 화면만 시연 경로를 그리지 않는다
+      demoNote();
+      syncAccidentLabels();
+      syncDest();
+      previewPlace();
+      if (!PREVIEW) poll(pollGen);
+      mapt('switch ' + (PREVIEW ? 'preview' : GID) + (rvChanged ? ' route' : ''));
+    };
+    if (rvChanged) api('GET', '/api/road/route').then(r => { if (gen !== pollGen) return; ROUTE = r; CUM = null; redraw(); }).catch(e => { console.warn('route', e); location.reload(); });   // 못 읽으면 예전처럼 다시 연다
+    else redraw();
+    return true;
+  } catch (e) { console.warn('linkGo', e); return false; }
+};
+demoNote();
 poll();
 </script>
 </body>
